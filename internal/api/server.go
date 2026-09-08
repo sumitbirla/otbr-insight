@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/otbr-insight/otbr-insight/internal/backup"
+	"github.com/otbr-insight/otbr-insight/internal/mcpserver"
 	"github.com/otbr-insight/otbr-insight/internal/model"
 	"github.com/otbr-insight/otbr-insight/internal/names"
 	"github.com/otbr-insight/otbr-insight/internal/otbr"
@@ -107,6 +108,9 @@ func Handler(data Snapshotter, names NameStore, control NetworkController, backu
 		}
 		writeJSON(w, status, map[string]any{"status": overview.Status, "apiHealth": overview.APIHealth})
 	})
+	// MCP endpoint for assistants, on the same listener and under the same
+	// trust model as the REST API. Read-only plus ping; see internal/mcpserver.
+	mux.Handle("/mcp", mcpserver.Handler(data, names, control, logger))
 	mux.Handle("/", frontend)
 	return securityHeaders(requestLog(rejectCrossSite(mux), logger))
 }

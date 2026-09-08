@@ -4,7 +4,7 @@ OTBR Insight is a monitoring and management dashboard for an [OpenThread Border 
 
 It has **two modes**. Pointed at an OTBR over the network it uses the REST API alone and runs anywhere. Running **on the border router itself** it can additionally read OpenThread's daemon socket, which supplies live mesh data, nearby-network scanning, runtime radio details, event history, and reachability testing — none of which the REST API exposes. See [Data sources](#data-sources).
 
-It shows the Thread mesh as a map and a list, lets you name devices, scans for nearby Thread networks, and can form, join, enable, disable, leave, and restore the Thread network on the border router.
+It shows the Thread mesh as a map and a list, lets you name devices, scans for nearby Thread networks, and can form, join, enable, disable, leave, and restore the Thread network on the border router. It also serves a [Model Context Protocol](https://modelcontextprotocol.io) endpoint, so an AI assistant can read the same mesh data and help diagnose it — see [Assistant access (MCP)](#assistant-access-mcp).
 
 ![The OTBR Insight mesh map: four Thread routers, each drawn as a cluster with its attached child devices beneath it](docs/mesh-map.png)
 
@@ -55,6 +55,13 @@ The rest follows from that gap:
 
 Every destructive action is confirmed in a dialog before it is sent.
 
+**Assistant access** (MCP)
+
+- Built-in Model Context Protocol server at `/mcp`, no extra process or configuration
+- Six tools covering the network summary, device list, topology, event history, reachability testing, and nearby-network scan
+- Results shaped for a language model: device names instead of hex, parents by name, ages in seconds, topology nested by router
+- Read-only by design — no network writes and no credentials over MCP
+
 ## Security model
 
 Read this before exposing the dashboard.
@@ -64,6 +71,7 @@ Read this before exposing the dashboard.
 - **Reverse proxies must forward the host.** The origin check compares against the `Host` header, or `X-Forwarded-Host` when present. With nginx, set `proxy_set_header Host $host;` or writes from the browser will be refused.
 - **Credentials stay off the polled path.** The network key and PSKc are masked in every continuously refreshed response. They are served only by `GET /api/v1/network/credentials`, which the UI calls when you press Reveal, and they are never logged.
 - **The backup file holds the network key in plaintext.** It lives at `<data-dir>/dataset-backup.json`. Protect the data directory accordingly; the sample systemd unit keeps it under `/var/lib/otbr-insight` via `StateDirectory`.
+- **The MCP endpoint shares this posture.** `/mcp` is unauthenticated like the rest of the API. It exposes read tools and a ping; it cannot form, join or leave a network, and it never returns credentials. See [Assistant access (MCP)](#assistant-access-mcp).
 - **The app never executes a command.** It runs no subprocess: no `ot-ctl`, no shell. It cannot factory-reset the router or commission devices with a PSKd.
 - **It does speak the daemon socket protocol directly** when `--otbr-socket` points at a live socket. That is the same channel `ot-ctl` uses, and everything the app sends over it is listed under [Data sources](#data-sources) — reads, one active scan, and one ping. It sends no command that changes network configuration; all such writes go over REST.
 - **Socket access needs privilege.** `otbr-agent` creates the socket mode `0755 root:root`, and `connect()` requires write access, so only root can open it. The sample unit therefore runs as root, which means an unauthenticated service is driving a root process — see the notes in the unit file for the alternatives.
@@ -163,7 +171,7 @@ Adjust `ExecStart` if OTBR listens on a different address or port.
 
 ## Building from source
 
-Go 1.24 or newer is required.
+Go 1.25 or newer is required.
 
 ```sh
 make test       # go test ./...
@@ -190,6 +198,7 @@ The browser talks only to this API; it never contacts OTBR directly. Responses a
 | `GET /api/v1/network/credentials` | The unmasked network key, PSKc, and dataset TLV |
 | `GET /api/v1/history` | OpenThread's recorded role, partition, and neighbour events, with user names overlaid; needs the daemon socket |
 | `GET /api/v1/health` | `{"status", "apiHealth"}`; returns 503 when OTBR is offline and no snapshot has ever been received |
+| `POST /mcp` | Model Context Protocol endpoint; see [Assistant access (MCP)](#assistant-access-mcp) |
 
 **Write** (same-origin or non-browser clients only; JSON bodies require `Content-Type: application/json`)
 
@@ -206,6 +215,97 @@ The browser talks only to this API; it never contacts OTBR directly. Responses a
 | `POST /api/v1/devices/{address}/ping` | — | Reachability test from the border router; needs the daemon socket. A POST because it makes the radio transmit, though it changes nothing. Can take tens of seconds against a sleepy device |
 
 Errors carry `{"error": "..."}`. Invalid input returns 400, a cross-site request 403, a wrong content type 415, an OTBR rejection 409 or 502, an OTBR timeout 504, and an unreachable OTBR 502. Every network change is preceded by a dataset backup and followed by an immediate status refresh.
+
+## Assistant access (MCP)
+
+The binary serves a [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp`, on the same port as the dashboard. An MCP client such as Claude connects to it and gets the mesh as a set of tools, so questions like *"why does the porch sensor keep dropping off?"* can be answered by reading the device list, the event history and a ping from the border router, in the same conversation. Nothing extra runs: it is the same process, reading the same snapshots the dashboard shows.
+
+### Connecting
+
+The endpoint is `http://<host>:8088/mcp` (adjust for `--listen`). It uses the Streamable HTTP transport in stateless mode, which every current MCP client supports as a "remote" or "HTTP" server.
+
+Claude Code:
+
+```sh
+claude mcp add --transport http otbr-insight http://openthread-br.local:8088/mcp
+```
+
+Claude Desktop: Settings → Connectors → Add custom connector, and paste the URL. Clients configured through a JSON file, such as a project `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "otbr-insight": {
+      "type": "http",
+      "url": "http://openthread-br.local:8088/mcp"
+    }
+  }
+}
+```
+
+No token or header is required. The client must be on the same LAN as the dashboard, or reach it through whatever proxy you already use for the web UI.
+
+### Available tools
+
+| Tool | Arguments | Returns | Needs |
+| --- | --- | --- | --- |
+| `get_network` | — | Network name, channel, PAN ID, extended PAN ID and mesh-local prefix; the border router's role, state, RLOC16, addresses and firmware versions; leader, partition and router count; and **device counts** — total, routers, end devices, unnamed, and any device not heard from in ten minutes, by name. It does **not** include the device list, so it stays cheap to call first | REST |
+| `list_devices` | `role` (`router` or `end-device`), `query` (substring of name, extended address or RLOC16) | One entry per device: name, extended address, role, parent **by name**, seconds since last heard, RSSI, link quality (0–3), link margin, frame and message error rates, mesh-local and OMR addresses | REST; live data with the socket |
+| `get_topology` | — | Each router with the children attached to it, ordered border router first, then the leader; router-to-router links with link quality in/out, path cost and RSSI; and a separate list of children whose parent could not be resolved | REST; live data with the socket |
+| `get_history` | `device` (name, extended address or RLOC16), `limit` (default 30) | OpenThread's own event log, newest first, with each entry's age in seconds: role and partition changes for the border router, and devices attaching or detaching with the signal at the time | Daemon socket |
+| `ping_device` | `device` (name, extended address, RLOC16 or IPv6 address), `count` (1–10, default 3) | Sent and received counts and min/average/max round trip, plus which address was used. Prefers the mesh-local address, which survives roaming | Daemon socket |
+| `scan_networks` | — | Other Thread networks on the air: name, extended PAN ID, PAN ID, channel and the beaconing device's address | Socket or `otbr-web` |
+
+All six tools are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
+
+A device can be named any way the dashboard shows it. `ping_device` with `"kitchen sensor"` matches the label you gave it (case-insensitively, and by unique substring), `"0x0401"` matches an RLOC16, and a bare IPv6 address is used as given. When no device matches, the error says so and points at `list_devices`.
+
+### What the results look like
+
+`list_devices` returns one entry per device, shaped like this (identifiers are documentation values):
+
+```json
+{
+  "name": "Porch button",
+  "extendedAddress": "0203040506070809",
+  "role": "child",
+  "rloc16": "0x0805",
+  "parent": "Hallway plug",
+  "lastSeenSeconds": 10,
+  "rssi": -91,
+  "linkQuality": 1,
+  "linkMargin": 9,
+  "frameErrorRate": 0.3384,
+  "messageErrorRate": 0.043,
+  "meshLocalAddress": "fdde:ad00:beef:0:c104:8c20:72de:23db",
+  "omrAddress": "fd11:2233:4455:1:e296:4b34:a94d:5ee8"
+}
+```
+
+Read together, those fields already tell the story: a child at the edge of range (RSSI −91, link quality 1) attached to a router rather than the border router, with a third of its frames needing a retry.
+
+The shapes are deliberately not the REST payloads. Names replace hex wherever a label exists, parents are named rather than given as RLOC16s, timestamps become ages, and the topology is nested by router rather than flattened into node and edge lists. Every tool also returns a structured result alongside the text, so clients that use output schemas get typed fields. The server's instructions, sent on connect, give the model the reading conventions — what a weak RSSI is, that error rates are a rolling average over roughly the last 64 frames, and that a sleepy device answering a ping late is normal.
+
+### What is deliberately missing
+
+- **No network writes.** Form, join, leave, enable, disable and restore are not exposed. In the UI every one of them sits behind a confirmation dialog, and a tool call is a single click by another name. If an assistant needs to change the network, it can tell you what to click.
+- **No credentials.** The network key, PSKc and dataset TLV are not served by any tool, in keeping with the rule that credentials never appear on a read path.
+- **No device renaming.** The endpoint is read-only apart from the ping. Renaming is a harmless write and could be added if it proves useful.
+
+### Security
+
+The endpoint has the same posture as the rest of the API: no authentication, trusted LAN only. In practice it exposes less than the dashboard does, since it cannot change anything or reveal credentials. A few specifics:
+
+- Cross-site POSTs are rejected the same way as the REST writes, so a web page cannot use your browser to query the endpoint. Non-browser clients pass.
+- `GET /mcp` returns 405. The server is stateless, so there is no session to hijack and no server-to-client stream to leave open.
+- Behind a reverse proxy, forward the request as-is; the endpoint does not depend on `Host` and imposes no origin check of its own beyond the cross-site rule above.
+
+### Troubleshooting
+
+- **Client reports 403.** The request carried a browser `Origin` from another site. MCP clients do not send one; if a proxy is adding headers, remove them for `/mcp`.
+- **`ping_device` or `get_history` says it needs the daemon socket.** The socket is not present on this host; both work only when otbr-insight runs on the border router. See [Data sources](#data-sources).
+- **`get_history` or `ping_device` returns "permission denied".** The socket exists but the process cannot open it; only root can, see the systemd notes above.
+- **A ping takes a long time.** Sleepy end devices answer only when they next wake. The tool waits up to 60 seconds.
 
 ## OTBR compatibility notes
 
@@ -234,16 +334,17 @@ go run ./tools/matter-xref -api http://127.0.0.1:8088
 - OTBR builds without the device collection or diagnostics endpoints show only the local border router.
 - Child devices are matched to the inventory by extended address only when the firmware's diagnostic `children` TLV reports one; older firmware falls back to a derived identifier that is stable only within one snapshot, and those children cannot be named.
 - Nearby-network scans require either the daemon socket or OTBR's web service. Over the socket they report network names and extended PAN IDs; via otbr-web those fields are often absent.
+- The MCP endpoint is read-only apart from the ping, and has no authentication of its own. An assistant can diagnose the network but not change it.
 
 ## Architecture
 
 ```
-OTBR REST API  ─┐
-                ├→ internal/otbr (Client) → internal/service (Monitor) → internal/api → web/static
-daemon socket  ─┘   via internal/otctl
+OTBR REST API  ─┐                                                          ┌→ web/static  (dashboard)
+                ├→ internal/otbr (Client) → internal/service (Monitor) → internal/api ┤
+daemon socket  ─┘   via internal/otctl                                     └→ internal/mcpserver  (/mcp)
 ```
 
-`internal/model` is the normalized contract shared by every layer. The OTBR client implements `service.ThreadProvider`. `internal/otctl` is injected into it through small optional interfaces — mesh reader, scanner, status reader, history reader, pinger — so `internal/otbr` never imports it and an absent socket simply means absent capability. `internal/names` and `internal/backup` are the only persistent state.
+`internal/model` is the normalized contract shared by every layer. The OTBR client implements `service.ThreadProvider`. `internal/otctl` is injected into it through small optional interfaces — mesh reader, scanner, status reader, history reader, pinger — so `internal/otbr` never imports it and an absent socket simply means absent capability. `internal/mcpserver` sits beside the REST handlers on the same mux and reads the same snapshots and name store, reshaping them for a language model; it is the one place the module takes a dependency, on the official MCP Go SDK. `internal/names` and `internal/backup` are the only persistent state.
 
 ## License
 
