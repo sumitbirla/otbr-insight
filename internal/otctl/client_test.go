@@ -267,6 +267,30 @@ func TestStatusFillsTheFieldsOtbrWebUsedToSupply(t *testing.T) {
 	}
 }
 
+// The OMR address is a ULA too, and on a live border router "ipaddr" listed it
+// before the mesh-local EID, so a first-ULA guess reported the OMR address as
+// mesh-local. "ipaddr mleid" answers the question directly.
+func TestStatusTakesTheMeshLocalEIDFromTheDaemonNotTheAddressOrder(t *testing.T) {
+	client := New(fakeDaemon(t, map[string]string{
+		"version":      "OPENTHREAD/8fbe09e; POSIX; Apr 22 2026 22:59:52\r\nDone\r\n",
+		"ipaddr mleid": "fdde:ad00:beef:9004:899d:add6:1913:7675\r\nDone\r\n",
+		"ipaddr": "fdde:ad00:beef:9004:0:ff:fe00:fc11\r\n" +
+			"fd11:2233:4455:1:60c5:d77f:b600:6ee5\r\n" +
+			"fdde:ad00:beef:9004:0:ff:fe00:7000\r\n" +
+			"fdde:ad00:beef:9004:899d:add6:1913:7675\r\n" +
+			"fe80:0:0:0:844:8010:97e9:ab9b\r\n" +
+			"Done\r\n",
+	}), 2*time.Second)
+
+	status, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.MeshLocalAddress != "fdde:ad00:beef:9004:899d:add6:1913:7675" {
+		t.Errorf("MeshLocalAddress = %q, want the EID, not the OMR address listed first", status.MeshLocalAddress)
+	}
+}
+
 func TestStatusFailsWhenTheDaemonCannotAnswer(t *testing.T) {
 	client := New(fakeDaemon(t, map[string]string{}), time.Second)
 	if _, err := client.Status(context.Background()); err == nil {

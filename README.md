@@ -135,7 +135,7 @@ Everything the dashboard shows comes from one of two channels. The REST API work
 | Frame and message error rates for **routers** as well as children | `neighbor linkquality` |
 | Router link quality in/out and path cost | `router table` |
 | Addresses of routers, which appear in no child table | `srp server host` |
-| The border router's own addresses | `ipaddr` |
+| The border router's own addresses | `ipaddr`, `ipaddr mleid` |
 | Which address is off-mesh routable | `br omrprefix` |
 | Nearby Thread networks, with names and extended PAN IDs | `discover`, falling back to `scan` |
 | Runtime details: OpenThread and RCP versions, API version, channel, transmit power, EUI-64, PAN ID, interface state | `version`, `version api`, `rcp version`, `channel`, `txpower`, `eui64`, `panid`, `state` |

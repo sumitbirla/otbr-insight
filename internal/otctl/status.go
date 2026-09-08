@@ -62,6 +62,11 @@ func (c *Client) Status(ctx context.Context) (*model.Overview, error) {
 	default:
 		overview.WPANService = overview.RCPState
 	}
+	// "ipaddr mleid" names the mesh-local EID outright. The scan below is the
+	// fallback for firmware without it, and it is only a guess: "ipaddr" lists the
+	// OMR address among the mesh-local ones, and on a real border router it came
+	// first, so guessing "first ULA that is not a locator" picked the OMR address.
+	overview.MeshLocalAddress = first("ipaddr mleid")
 	for _, address := range c.allAddresses(ctx) {
 		switch {
 		case strings.HasPrefix(strings.ToLower(address), "fe80:"):
@@ -70,7 +75,7 @@ func (c *Client) Status(ctx context.Context) (*model.Overview, error) {
 			}
 		case strings.Contains(strings.ToLower(address), ":0:ff:fe00:"):
 			// A routing or anycast locator, not a stable address.
-		case overview.MeshLocalAddress == "" && meshLocalLooking(address, overview.OMRIPv6Address):
+		case overview.MeshLocalAddress == "" && meshLocalLooking(address):
 			overview.MeshLocalAddress = address
 		}
 	}
@@ -93,10 +98,9 @@ func (c *Client) allAddresses(ctx context.Context) []string {
 	return addresses
 }
 
-// meshLocalLooking reports whether an address is the mesh-local EID rather than the
-// OMR one. Both are ULAs; the OMR address is known separately, so anything else
-// under fd00::/8 that is not a locator is the mesh-local EID.
-func meshLocalLooking(address, omr string) bool {
-	lower := strings.ToLower(address)
-	return strings.HasPrefix(lower, "fd") && lower != strings.ToLower(omr)
+// meshLocalLooking reports whether an address could be the mesh-local EID: a ULA
+// that is not a locator. It cannot tell the EID from the OMR address, which is
+// also a ULA, so it serves only when "ipaddr mleid" is unavailable.
+func meshLocalLooking(address string) bool {
+	return strings.HasPrefix(strings.ToLower(address), "fd")
 }
