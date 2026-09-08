@@ -6,6 +6,10 @@ It has **two modes**. Pointed at an OTBR over the network it uses the REST API a
 
 It shows the Thread mesh as a map and a list, lets you name devices, scans for nearby Thread networks, and can form, join, enable, disable, leave, and restore the Thread network on the border router.
 
+![The OTBR Insight mesh map: four Thread routers, each drawn as a cluster with its attached child devices beneath it](docs/mesh-map.png)
+
+*The mesh view — one cluster per router, with signal strength and last-seen on every card. Populated here with synthetic data; the identifiers are documentation values, not a real network.*
+
 ## Why this exists
 
 OTBR already ships with a web UI, `otbr-web`. This project started because that one was hard to understand.
