@@ -230,7 +230,7 @@ Claude Code:
 claude mcp add --transport http otbr-insight http://openthread-br.local:8088/mcp
 ```
 
-Claude Desktop: Settings → Connectors → Add custom connector, and paste the URL. Clients configured through a JSON file, such as a project `.mcp.json`:
+Claude Desktop's "Add custom connector" accepts only `https://` URLs, since it is meant for servers on the internet; a LAN server goes in `claude_desktop_config.json` instead, as a local command that bridges stdio to the URL (for example `npx mcp-remote http://openthread-br.local:8088/mcp --allow-http`). Clients configured through a JSON file, such as a project `.mcp.json`:
 
 ```json
 {
