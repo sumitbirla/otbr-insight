@@ -1,0 +1,30 @@
+# Build output. `make build` writes dist/otbr-insight; `make release` adds the
+# cross-compiled linux binaries. All reproducible from source.
+/dist/
+/otbr-insight
+
+# Release artifacts and the source tarball, kept out for the same reason.
+/outputs/
+
+# Scratch directory.
+/work/
+
+# Personal Claude Code settings: machine-specific permission rules, not shared
+# project config. A committed .claude/settings.json would be, and is not ignored.
+/.claude/settings.local.json
+
+# Editor and IDE settings.
+/.vscode/
+/.idea/
+
+# Go test and coverage artifacts.
+*.test
+*.out
+coverage.*
+
+# Local device names and the dataset backup, if anyone points --data-dir here.
+# The backup holds the network key in plaintext; it must never be committed.
+names.json
+dataset-backup.json
+
+.DS_Store

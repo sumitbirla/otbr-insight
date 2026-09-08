@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1016">
+  <meta name="description" content="OTBR Insight — monitoring and management dashboard for an OpenThread Border Router.">
+  <title>OTBR Insight</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#home" aria-label="OTBR Insight home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="brand-text"><strong>OTBR</strong><small>INSIGHT</small></span>
+      </a>
+
+      <nav class="main-nav" aria-label="Primary navigation">
+        <p>CURRENT NETWORK</p>
+        <a class="active" href="#home" data-nav="home" aria-current="page"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></span><span class="nav-label">Devices &amp; mesh</span></a>
+        <p>DISCOVER</p>
+        <a href="#network" data-nav="network"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span><span class="nav-label">Nearby Networks</span></a>
+        <p>MANAGE</p>
+        <a href="#manage" data-nav="manage"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span><span class="nav-label">Network Setup</span></a>
+        <p>TOOLS</p>
+        <a href="#diagnostics" data-nav="diagnostics"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span class="nav-label">Diagnostics</span></a>
+        <a href="#help" data-nav="help"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span><span class="nav-label">Help</span></a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="mini-status"><span class="status-dot" data-status-dot></span><span><b data-status-label>Connecting</b><small>OTBR REST API</small></span></div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="title-block">
+          <span class="eyebrow" id="pageEyebrow">THREAD NETWORK</span>
+          <div class="title-row">
+            <h1 id="pageTitle">Overview</h1>
+            <dl class="title-meta" id="titleMeta">
+              <div><dt data-term="thread-channel">Channel</dt><dd data-field="rcpChannel">—</dd></div>
+              <div><dt data-term="pan-id">PAN ID</dt><dd class="mono" data-field="panId">—</dd></div>
+            </dl>
+          </div>
+        </div>
+        <div class="top-actions">
+          <span class="updated"><i data-refresh-dot></i><span data-updated>Waiting for first refresh</span></span>
+          <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh data" title="Refresh data"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+          <button class="icon-button" id="themeButton" type="button" aria-label="Toggle light and dark theme" title="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
+        </div>
+      </header>
+
+      <div class="content">
+        <div class="view" data-view="home">
+        <section class="alert hidden" id="healthAlert" role="status">
+          <span class="alert-icon">!</span>
+          <div><strong id="alertTitle">OTBR unavailable</strong><p id="alertText">Trying to reconnect while keeping the last known data visible.</p></div>
+        </section>
+
+        <div class="mesh-toolbar">
+          <div class="device-view-actions">
+            <div class="device-view-switch" role="group" aria-label="Device view">
+              <button class="active" type="button" data-device-mode="map" aria-pressed="true" aria-controls="deviceMapPanel"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></span>Map</button>
+              <button type="button" data-device-mode="list" aria-pressed="false" aria-controls="deviceListPanel"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span>List</button>
+            </div>
+          </div>
+        </div>
+
+          <div id="deviceMapPanel" data-device-panel="map">
+            <section class="topology-panel card">
+              <div class="topology-toolbar">
+                <div class="topology-legend" aria-label="Device map legend">
+                  <span><i class="leader"></i>Leader</span><span><i class="router"></i>Router</span><span><i class="child"></i>End device</span><span><i class="local"></i>Local OTBR</span><span><i class="link-router"></i>Router link</span><span><i class="link-child"></i>Child link</span>
+                </div>
+                <span class="topology-source" id="topologySource">Reading device relationships…</span>
+              </div>
+              <div class="inventory-note neutral topology-note hidden" id="topologyNote" role="status"><span>i</span><p></p></div>
+              <div class="topology-workspace">
+                <div class="topology-scroll" id="topologyScroll">
+                  <div class="topology-stage" id="topologyStage" aria-label="Devices in this Thread network" aria-live="polite">
+                    <div class="inventory-empty"><span class="loading-ring"></span><strong>Building device map</strong><p>Reading device roles and parent relationships.</p></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div class="hidden" id="deviceListPanel" data-device-panel="list">
+            <section class="inventory-panel card">
+              <div class="inventory-toolbar">
+                <label class="search-field"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span><input id="deviceSearch" type="search" placeholder="Search by name, address, role…" aria-label="Search devices"></label>
+                <label class="select-field"><span>ROLE</span><select id="roleFilter" aria-label="Filter devices by role"><option value="all">All roles</option><option value="router">Routers</option><option value="end-device">End devices</option><option value="unknown">Unknown</option></select></label>
+                <span class="inventory-source" id="inventorySource">Checking OTBR device support…</span>
+              </div>
+              <div class="inventory-note hidden" id="inventoryNote" role="status"><span>i</span><p></p></div>
+              <div class="device-table" role="table" aria-label="Thread device inventory">
+                <div class="device-table-head" role="row">
+                  <span role="columnheader">Device</span><span role="columnheader" data-term="device-role">Role</span><span role="columnheader" data-term="rloc16">RLOC16</span><span role="columnheader" data-term="omr-ipv6">OMR IPv6</span><span role="columnheader" data-term="link-metrics">Link</span><span role="columnheader" data-term="observed">Observed</span>
+                </div>
+                <div id="deviceRows" class="device-rows" role="rowgroup" aria-live="polite">
+                  <div class="inventory-empty"><span class="loading-ring"></span><strong>Loading device list</strong><p>Reading available OTBR device data.</p></div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+        <section class="detail-disclosures" aria-label="Network and border router details">
+          <details class="disclosure card" id="networkDetailsDisclosure">
+            <summary><span class="disclosure-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span><span class="disclosure-title"><span class="eyebrow">TECHNICAL DETAILS</span><strong>Network details</strong></span><span class="read-only-badge">READ ONLY</span></summary>
+            <div class="disclosure-body">
+            <article class="card detail-card">
+              <div class="card-heading"><div><span class="eyebrow">IDENTITY</span><h3>Network details</h3></div><span class="quiet-icon">#</span></div>
+              <dl class="detail-list">
+                <div><dt data-term="extended-address">Extended address</dt><dd class="mono" data-field="extendedAddress">—</dd><button class="copy-button" data-copy="extendedAddress" aria-label="Copy extended address">Copy</button></div>
+                <div><dt data-term="pan-id">PAN ID</dt><dd class="mono" data-field="panId">—</dd><button class="copy-button" data-copy="panId" aria-label="Copy PAN ID">Copy</button></div>
+                <div><dt data-term="extended-pan-id">Extended PAN ID</dt><dd class="mono" data-field="extendedPanId">—</dd><button class="copy-button" data-copy="extendedPanId" aria-label="Copy extended PAN ID">Copy</button></div>
+                <div><dt data-term="router-id">Router ID</dt><dd class="mono" data-field="routerId">—</dd></div>
+                <div><dt data-term="leader-router">Leader router ID</dt><dd class="mono" data-field="leaderRouterId">—</dd></div>
+                <div><dt data-term="rloc16">RLOC16</dt><dd class="mono" data-field="rloc16">—</dd><button class="copy-button" data-copy="rloc16" aria-label="Copy RLOC16">Copy</button></div>
+              </dl>
+            </article>
+
+            </div>
+          </details>
+          <details class="disclosure card" id="borderRouterDisclosure">
+            <summary><span class="disclosure-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span><span class="disclosure-title"><span class="eyebrow">LOCAL BORDER ROUTER</span><strong>Interfaces and runtime</strong></span><span class="read-only-badge">READ ONLY</span></summary>
+            <div class="disclosure-body">
+            <article class="card detail-card">
+              <div class="card-heading"><div><span class="eyebrow">IPV6 INTERFACES</span><h3>Local addressing</h3></div><span class="quiet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span></div>
+              <dl class="detail-list">
+                <div><dt data-term="link-local">Link-local address</dt><dd class="mono address" data-field="linkLocalAddress">—</dd><button class="copy-button" data-copy="linkLocalAddress" aria-label="Copy link-local address">Copy</button></div>
+                <div><dt data-term="omr-ipv6">OMR local address</dt><dd class="mono address" data-field="omrIpv6Address">—</dd><button class="copy-button" data-copy="omrIpv6Address" aria-label="Copy OMR local address">Copy</button></div>
+                <div><dt data-term="mesh-local">Mesh-local address</dt><dd class="mono address" data-field="meshLocalAddress">—</dd><button class="copy-button" data-copy="meshLocalAddress" aria-label="Copy mesh-local address">Copy</button></div>
+                <div><dt data-term="mesh-local">Mesh-local prefix</dt><dd class="mono address" data-field="meshLocalPrefix">—</dd><button class="copy-button" data-copy="meshLocalPrefix" aria-label="Copy mesh-local prefix">Copy</button></div>
+                <div><dt data-term="rloc-address">RLOC IPv6 address</dt><dd class="mono address" data-field="rlocAddress">—</dd><button class="copy-button" data-copy="rlocAddress" aria-label="Copy RLOC IPv6 address">Copy</button></div>
+              </dl>
+            </article>
+
+            <article class="card detail-card runtime-card">
+              <div class="card-heading"><div><span class="eyebrow">SOFTWARE &amp; RADIO</span><h3>OpenThread runtime</h3></div><span class="quiet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg></span></div>
+              <dl class="detail-list runtime-list">
+                <div><dt data-term="wpan-service">WPAN service</dt><dd class="capitalize" data-field="wpanService">—</dd></div>
+                <div><dt data-term="border-agent">Border Agent</dt><dd class="capitalize" data-field="borderAgentState">—</dd></div>
+                <div><dt>OpenThread version</dt><dd class="mono wrap-value" data-field="openThreadVersion">—</dd></div>
+                <div><dt data-term="openthread-api">OpenThread API</dt><dd class="mono" data-field="openThreadApiVersion">—</dd></div>
+                <div><dt data-term="thread-channel">RCP channel</dt><dd class="mono" data-field="rcpChannel">—</dd></div>
+                <div><dt data-term="rcp">RCP state</dt><dd class="capitalize" data-field="rcpState">—</dd></div>
+                <div><dt data-term="rcp">RCP EUI-64</dt><dd class="mono" data-field="rcpEui64">—</dd><button class="copy-button" data-copy="rcpEui64" aria-label="Copy RCP EUI-64">Copy</button></div>
+                <div><dt>Transmit power</dt><dd class="mono" data-field="rcpTxPower">—</dd></div>
+                <div><dt data-term="rcp">RCP version</dt><dd class="mono wrap-value" data-field="rcpVersion">—</dd></div>
+              </dl>
+            </article>
+            </div>
+          </details>
+        </section>
+        </div>
+
+        <section class="network-section view hidden" id="networkView" data-view="network" aria-hidden="true">
+          <div class="view-intro network-view-intro">
+            <div class="network-intro-actions">
+              <span class="inventory-badge neutral" id="networkScanStatus">NOT SCANNED</span>
+              <button class="scan-button" id="scanNetworksButton" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span>Scan now</button>
+            </div>
+          </div>
+
+          <section class="network-scan-panel">
+            <div class="inventory-note neutral network-scan-note hidden" id="networkScanNote" role="status">
+              <span>i</span><p></p>
+            </div>
+            <div class="network-card-grid" id="networkRows" role="list" aria-label="Nearby Thread networks" aria-live="polite">
+              <div class="inventory-empty"><span class="network-scan-symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span><strong>No scan performed</strong><p>Select “Scan now” to look for Thread networks in radio range.</p></div>
+            </div>
+          </section>
+        </section>
+
+
+        <section class="diagnostics-section view hidden" id="diagnosticsView" data-view="diagnostics" aria-hidden="true">
+          <div class="view-intro">
+            <p>Events recorded by OpenThread itself, not observed by this dashboard — so they cover time before it was running.</p>
+            <button class="scan-button" id="refreshHistoryButton" type="button">Reload</button>
+          </div>
+          <div class="inventory-note hidden" id="historyNote" role="status"><span>i</span><p></p></div>
+
+          <section class="section-head"><div><span class="eyebrow">DEVICES</span><h2>Attachments and departures</h2></div></section>
+          <section class="inventory-panel card">
+            <div class="device-table" role="table" aria-label="Neighbour event history">
+              <div class="history-head" role="row">
+                <span role="columnheader">When</span><span role="columnheader">Device</span><span role="columnheader">Event</span><span role="columnheader" data-term="rloc16">RLOC16</span><span role="columnheader">Signal</span>
+              </div>
+              <div id="neighborHistoryRows" role="rowgroup" aria-live="polite">
+                <div class="inventory-empty"><span class="loading-ring"></span><strong>Reading event history</strong><p>Asking the border router for its recorded events.</p></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-head"><div><span class="eyebrow">THIS BORDER ROUTER</span><h2>Role and partition changes</h2></div></section>
+          <section class="inventory-panel card">
+            <div class="device-table" role="table" aria-label="Network event history">
+              <div class="history-head network" role="row">
+                <span role="columnheader">When</span><span role="columnheader" data-term="role">Role</span><span role="columnheader" data-term="rloc16">RLOC16</span><span role="columnheader" data-term="partition-id">Partition</span>
+              </div>
+              <div id="networkHistoryRows" role="rowgroup" aria-live="polite"></div>
+            </div>
+          </section>
+        </section>
+        <section class="help-section view hidden" id="helpView" data-view="help" aria-hidden="true">
+          <section class="help-primer card">
+            <div class="help-primer-heading">
+              <span class="help-primer-icon" aria-hidden="true">?</span>
+              <div><span class="eyebrow">THREAD IN 60 SECONDS</span><h2>How the network fits together</h2></div>
+            </div>
+            <p>Thread is a low-power IPv6 mesh. Mains-powered devices can become routers, battery-powered devices usually attach as children, and one router acts as leader for the current partition. The border router connects that mesh to Ethernet or Wi-Fi without becoming a central hub for local Thread traffic.</p>
+            <figure class="otbr-concept">
+              <figcaption><strong>Where OTBR sits</strong><span>It bridges two IPv6 links and provides discovery and commissioning services.</span></figcaption>
+              <div class="otbr-concept-map">
+                <section class="concept-zone concept-ip">
+                  <span class="concept-zone-label">ADJACENT IP NETWORK</span>
+                  <div class="concept-endpoint"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span><div><strong>Wi-Fi / Ethernet</strong><small>LAN and upstream services</small></div></div>
+                  <div class="concept-endpoint"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg></span><div><strong>Phone or commissioner</strong><small>Discovers and adds devices</small></div></div>
+                </section>
+
+                <div class="concept-connection ip" aria-hidden="true"><span>IPv6</span></div>
+
+                <section class="concept-router" aria-label="OpenThread Border Router connects the adjacent IP network to the Thread mesh">
+                  <span class="concept-router-badge">BRIDGE</span>
+                  <span class="concept-router-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span>
+                  <strong>OpenThread<br>Border Router</strong>
+                  <small>Routes between links</small>
+                  <div><span>Routing</span><span>Discovery</span><span>Commissioning</span></div>
+                </section>
+
+                <div class="concept-connection radio" aria-hidden="true"><span>802.15.4</span></div>
+
+                <section class="concept-zone concept-mesh">
+                  <span class="concept-zone-label">THREAD MESH</span>
+                  <div class="concept-mesh-visual" aria-hidden="true">
+                    <svg class="concept-mesh-lines" viewBox="0 0 100 190" preserveAspectRatio="none" aria-hidden="true">
+                      <line class="router-link" x1="50" y1="77.5" x2="10" y2="35.5"/>
+                      <line class="router-link" x1="50" y1="77.5" x2="90" y2="35.5"/>
+                      <line class="child-link" x1="50" y1="77.5" x2="14" y2="163.5"/>
+                      <line class="child-link" x1="50" y1="77.5" x2="86" y2="163.5"/>
+                    </svg>
+                    <span class="concept-device leader">◆<b>Leader</b></span>
+                    <span class="concept-device router-one">◆<b>Router</b></span>
+                    <span class="concept-device router-two">◆<b>Router</b></span>
+                    <span class="concept-device child-one">◇<b>Child</b></span>
+                    <span class="concept-device child-two">◇<b>Child</b></span>
+                  </div>
+                  <p>Routers and children communicate as a self-organizing mesh.</p>
+                </section>
+              </div>
+              <div class="concept-local-note"><span aria-hidden="true">↔</span><p><strong>Local mesh traffic stays local.</strong> Thread devices can communicate with one another without every packet passing through OTBR.</p></div>
+            </figure>
+          </section>
+
+          <section class="section-head help-head">
+            <div><span class="eyebrow">KEY CONCEPTS</span><h2>What the dashboard is showing</h2></div>
+          </section>
+          <section class="help-grid card">
+            <article><span class="help-card-icon"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3l9 9-9 9-9-9z"/></svg></span><h3 data-term="device-role">Device roles</h3><p>Leader, router, and child describe what a device is doing now—not its permanent identity.</p></article>
+            <article><span class="help-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></span><h3 data-term="parent-link">Parent relationships</h3><p>Children use one parent router to enter the mesh. The Devices map shows relationships OTBR can report or infer.</p></article>
+            <article><span class="help-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span><h3 data-term="omr-ipv6">Thread addresses</h3><p>Mesh-local addresses stay inside Thread; OMR addresses are designed to be reachable through a border router.</p></article>
+            <article><span class="help-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span><h3 data-term="thread-network">The border router</h3><p>OTBR connects the Thread mesh to the wider IPv6 network and exposes the status used by this dashboard.</p></article>
+            <article><span class="help-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span><h3 data-term="partition-id">Partitions</h3><p>Nodes that can reach one another form a partition with one leader. Separated groups run as their own partitions and merge again when they reconnect.</p></article>
+            <article><span class="help-card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg></span><h3 data-term="rloc16">RLOC16</h3><p>A short address that encodes where a node currently sits in the mesh: the upper bits identify its router, the rest identify children under it.</p></article>
+          </section>
+
+          <section class="help-hint card">
+            <span class="term-help-button help-example" aria-hidden="true">?</span>
+            <div><strong>Look for question markers</strong><p>Open any <b>?</b> beside a label for a short explanation of that specific Thread term and why it matters.</p></div>
+          </section>
+        </section>
+
+        <section class="manage-section view hidden" id="manageView" data-view="manage" aria-hidden="true">
+          <div class="view-intro">
+            <p>Create, join, or control the Thread network on this border router.</p>
+            <span class="read-only-badge writes-badge">WRITES OTBR</span>
+          </div>
+
+          <article class="card detail-card manage-status">
+            <div class="card-heading">
+              <div><span class="eyebrow">CURRENT NETWORK</span><h3 id="manageStateLabel">Loading…</h3></div>
+              <button class="state-toggle" id="toggleStateButton" type="button" disabled>—</button>
+            </div>
+            <dl class="detail-list">
+              <div><dt>Network name</dt><dd data-net="networkName">—</dd></div>
+              <div><dt>Channel</dt><dd data-net="channel">—</dd></div>
+              <div><dt data-term="pan-id">PAN ID</dt><dd class="mono" data-net="panId">—</dd></div>
+              <div><dt data-term="extended-pan-id">Extended PAN ID</dt><dd class="mono" data-net="extPanId">—</dd></div>
+              <div><dt>Credentials</dt><dd data-net="creds">—</dd></div>
+            </dl>
+            <div class="creds-panel hidden" id="credsPanel"></div>
+          </article>
+
+          <div class="restore-banner hidden" id="restoreBanner">
+            <div><strong>Previous network saved</strong><p id="restoreInfo"></p></div>
+            <button class="restore-button" id="restoreButton" type="button">Restore previous network</button>
+          </div>
+
+          <section class="section-head"><div><span class="eyebrow">SET UP</span><h2>Create or join a network</h2></div></section>
+          <div class="manage-grid">
+            <article class="card detail-card">
+              <div class="card-heading"><div><span class="eyebrow">NEW NETWORK</span><h3>Form a network</h3></div></div>
+              <p class="manage-hint">Generates fresh credentials and forms a brand-new Thread network.</p>
+              <form id="formNetworkForm" class="manage-form" autocomplete="off">
+                <label>Network name <input name="networkName" maxlength="16" placeholder="Home Lab" required></label>
+                <label>Channel <small>11–26, optional</small><input name="channel" type="number" min="11" max="26" placeholder="auto"></label>
+                <label>PAN ID <small>hex, optional</small><input name="panId" placeholder="auto, e.g. 0x1234"></label>
+                <p class="rename-error hidden" data-err="form"></p>
+                <button type="submit" class="scan-button manage-submit">Form network</button>
+              </form>
+            </article>
+            <article class="card detail-card">
+              <div class="card-heading">
+                <div><span class="eyebrow">EXISTING NETWORK</span><h3>Join a network</h3></div>
+                <div class="join-mode-switch" role="group" aria-label="Join input mode">
+                  <button type="button" class="active" data-join-mode="fields" aria-pressed="true">Fields</button>
+                  <button type="button" data-join-mode="tlv" aria-pressed="false">Paste TLV</button>
+                </div>
+              </div>
+              <form id="joinNetworkForm" class="manage-form" autocomplete="off">
+                <p class="manage-hint">Attaches using credentials you already have (network key required).</p>
+                <label>Network name <input name="networkName" maxlength="16" required></label>
+                <label>Network key <small>32 hex characters</small><input name="networkKey" placeholder="e.g. 00112233445566778899aabbccddeeff" required></label>
+                <label>Channel <small>11–26</small><input name="channel" type="number" min="11" max="26" required></label>
+                <label>PAN ID <small>hex</small><input name="panId" placeholder="0xa1b2" required></label>
+                <label>Extended PAN ID <small>16 hex, optional</small><input name="extPanId" placeholder="1122334455667788"></label>
+                <label>PSKc <small>32 hex, optional — needed to commission via this router</small><input name="pskc" placeholder="e.g. fedcba9876543210fedcba9876543210"></label>
+                <label>Mesh-local prefix <small>fd00::/8, /64, optional</small><input name="meshLocalPrefix" placeholder="fd11:22::/64"></label>
+                <p class="rename-error hidden" data-err="join"></p>
+                <button type="submit" class="scan-button manage-submit">Join network</button>
+              </form>
+              <form id="joinTlvForm" class="manage-form hidden" autocomplete="off">
+                <p class="manage-hint">Paste an operational dataset (TLV hex) from another border router — e.g. Home Assistant's "Add dataset from TLV".</p>
+                <label>Operational dataset <small>TLV hex</small><textarea name="tlv" rows="5" placeholder="0e08000000000001000035060004001fffe0..." required></textarea></label>
+                <p class="rename-error hidden" data-err="tlv"></p>
+                <button type="submit" class="scan-button manage-submit">Join from dataset</button>
+              </form>
+            </article>
+          </div>
+
+          <section class="section-head"><div><span class="eyebrow">DANGER ZONE</span><h2>Leave network</h2></div></section>
+          <article class="card detail-card manage-danger">
+            <div><strong>Disable Thread and clear the active dataset</strong><p>The border router leaves its current network and all attached devices disconnect. This cannot be undone from here.</p></div>
+            <button class="danger-button" id="leaveNetworkButton" type="button">Leave network</button>
+          </article>
+        </section>
+
+        <footer><span>OTBR Insight</span><span>Local monitoring · No network credentials exposed</span></footer>
+      </div>
+    </main>
+  </div>
+  <aside class="term-popover hidden" id="termPopover" role="dialog" aria-modal="false" aria-labelledby="termTitle" aria-describedby="termDescription">
+    <button class="term-close" id="termClose" type="button" aria-label="Close explanation">×</button>
+    <span class="eyebrow">THREAD CONCEPT</span>
+    <h2 id="termTitle"></h2>
+    <p id="termDescription"></p>
+    <div class="term-why"><span>WHY IT MATTERS</span><p id="termWhy"></p></div>
+  </aside>
+  <aside class="device-popover hidden" id="devicePopover" role="dialog" aria-modal="false" aria-labelledby="devicePopoverTitle">
+    <button class="term-close" id="devicePopoverClose" type="button" aria-label="Close device details">×</button>
+    <span class="eyebrow">SELECTED DEVICE</span>
+    <h2 id="devicePopoverTitle" class="visually-hidden">Device details</h2>
+    <div id="devicePopoverBody"></div>
+  </aside>
+  <aside class="rename-popover hidden" id="renamePopover" role="dialog" aria-modal="false" aria-labelledby="renameTitle">
+    <button class="term-close" id="renameClose" type="button" aria-label="Close rename">×</button>
+    <span class="eyebrow">DEVICE NAME</span>
+    <h2 id="renameTitle">Rename device</h2>
+    <p id="renameTarget" class="rename-target"></p>
+    <form id="renameForm">
+      <input id="renameInput" type="text" maxlength="48" autocomplete="off" placeholder="e.g. Living room sensor" aria-label="Device name">
+      <p class="rename-error hidden" id="renameError" role="alert"></p>
+      <div class="rename-actions">
+        <button type="button" class="rename-clear hidden" id="renameClear">Remove name</button>
+        <button type="submit" class="rename-save" id="renameSave">Save</button>
+      </div>
+    </form>
+  </aside>
+  <div class="confirm-backdrop hidden" id="confirmBackdrop"></div>
+  <aside class="confirm-popover hidden" id="confirmPopover" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <span class="eyebrow confirm-eyebrow">CONFIRM</span>
+    <h2 id="confirmTitle">Are you sure?</h2>
+    <p id="confirmText"></p>
+    <p class="rename-error hidden" id="confirmError" role="alert"></p>
+    <div class="confirm-actions">
+      <button type="button" class="confirm-cancel" id="confirmCancel">Cancel</button>
+      <button type="button" class="confirm-go" id="confirmGo">Confirm</button>
+    </div>
+  </aside>
+  <div class="toast" id="toast" role="status" aria-live="polite">Copied to clipboard</div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

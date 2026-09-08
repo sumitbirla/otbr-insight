@@ -1,0 +1,51 @@
+[Unit]
+Description=OTBR Insight monitoring dashboard
+After=network-online.target otbr-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/otbr-insight --listen :8088 --otbr-url http://127.0.0.1:8081
+Restart=on-failure
+RestartSec=5
+# Runs as root because nearby-network scanning must open otbr-agent's socket,
+# which is mode 0755 root:root (see the note below). This service has no
+# authentication, so anyone able to reach the listen address drives a root
+# process; keep it on a trusted LAN. Swap to DynamicUser=yes to drop the
+# privilege at the cost of scanning.
+User=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# Persists user-assigned device names at /var/lib/otbr-insight; the binary
+# reads the StateDirectory path from the STATE_DIRECTORY environment variable.
+StateDirectory=otbr-insight
+
+# --- OpenThread daemon socket (optional) -------------------------------------
+# Nearby-network scanning has no REST equivalent: OTBR's REST API offers only an
+# energy-detect scan, so an active scan has to go through the OpenThread CLI on
+# otbr-agent's UNIX socket. This is what otbr-web does, and it is the one part of
+# otbr-insight that must run on the border router itself.
+#
+# ProtectSystem=strict leaves the hierarchy read-only and connect() on a UNIX
+# socket needs write access, so the socket must be exempted. The leading "-" keeps
+# the unit starting when the socket is absent.
+ReadWritePaths=-/run/openthread-wpan0.sock
+#
+# PERMISSIONS: otbr-agent creates the socket mode 0755 root:root — world readable,
+# NOT world writable — and connect() needs write, so only root can open it. This
+# was measured, not assumed: a non-root process gets
+#   "dial unix /run/openthread-wpan0.sock: connect: permission denied"
+# DynamicUser=yes therefore CANNOT scan. Pick one:
+#   (a) run as root — what this unit does, see User=root above
+#   (b) loosen the socket with a drop-in on otbr-agent granting a group, then
+#       DynamicUser=yes plus SupplementaryGroups=<that group>
+#   (c) DynamicUser=yes and accept no scanning — everything else, including the
+#       whole mesh map and network setup, works over REST and needs no socket.
+#
+# A non-default Thread interface changes the path; pass --otbr-socket to match.
+
+[Install]
+WantedBy=multi-user.target
+
