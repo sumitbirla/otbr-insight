@@ -155,7 +155,7 @@ func TestMeshCarriesPerChildLinkMetrics(t *testing.T) {
 			t.Errorf("AverageRSSI = %v, want -66", link.AverageRSSI)
 		}
 		// 30.97% in the CLI must reach the model as a fraction, not a percentage.
-		if link.FrameErrorRate == nil || *link.FrameErrorRate < 0.309 || *link.FrameErrorRate > 0.310 {
+		if link.FrameErrorRate == nil || *link.FrameErrorRate != 0.3097 {
 			t.Errorf("FrameErrorRate = %v, want ~0.3097", link.FrameErrorRate)
 		}
 		return

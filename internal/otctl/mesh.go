@@ -3,6 +3,7 @@ package otctl
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/netip"
 	"regexp"
 	"strconv"
@@ -691,7 +692,9 @@ func ratePtr(value string) *float64 {
 	if err != nil {
 		return nil
 	}
-	fraction := parsed / 100
+	// The CLI prints two decimals of a percentage, so four decimals of a fraction
+	// is the full precision; dividing without rounding leaves 0.16010000000000002.
+	fraction := math.Round(parsed*100) / 10000
 	return &fraction
 }
 
