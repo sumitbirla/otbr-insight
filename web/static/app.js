@@ -703,7 +703,13 @@ function renderTopology() {
   const devices = topologyDevices();
   const inventory = state.devices;
   const diagnosticTopology = Boolean(state.topology?.collectionSupported && (state.topology.nodes || []).length);
-  const routers = devices.filter(isTopologyRouter);
+  // The local border router anchors the map: it is the one node the reader is
+  // certain of, so it leads the first band rather than landing wherever its
+  // router id happens to sort. The leader follows, then everything else in the
+  // order the provider gave (sort is stable, so that order is preserved).
+  const routerRank = device => (device.isBorderRouter ? 0 : device.role === 'leader' ? 1 : 2);
+  const routers = devices.filter(isTopologyRouter)
+    .sort((left, right) => routerRank(left) - routerRank(right));
   const children = devices.filter(device => !isTopologyRouter(device));
   const attachments = new Map();
   children.forEach(device => {
