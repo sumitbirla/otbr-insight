@@ -316,6 +316,7 @@ The endpoint has the same posture as the rest of the API: no authentication, tru
 
 ## OTBR compatibility notes
 
+- **Transmit power is not persistent.** `ot-ctl txpower` writes only to the radio co-processor, so an agent restart or a radio reset silently returns it to the firmware default (0 dBm on an SMLIGHT SLZB-07). Children pick the router they hear loudest and re-evaluate only when they hear their parent poorly, so a border router that drops 5 dB quietly loses its children to any other router. Re-apply the value on every start with a systemd drop-in: an `ExecStartPost` on `otbr-agent.service` that retries `ot-ctl txpower <dBm>` until the daemon socket answers.
 
 The adapter normalizes several OTBR REST API variants. Behaviour observed on real firmware that shaped the design:
 
