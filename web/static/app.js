@@ -2,7 +2,7 @@
 // depend on it, and they must not drift from the CSS min-height.
 const TOPOLOGY_NODE_HEIGHT = 96;
 
-const state = { overview: null, devices: null, topology: null, networkScan: null, deviceMode: 'map', deviceQuery: '', roleFilter: 'all', topologySelectedId: '', expandedDevices: new Set(), busy: false, networkScanBusy: false, renamingExt: null, network: null };
+const state = { overview: null, devices: null, topology: null, networkScan: null, channelScan: null, deviceMode: 'map', deviceQuery: '', roleFilter: 'all', topologySelectedId: '', expandedDevices: new Set(), busy: false, networkScanBusy: false, renamingExt: null, network: null };
 const fields = [...document.querySelectorAll('[data-field]')];
 const statusDots = [...document.querySelectorAll('[data-status-dot]')];
 const statusLabels = [...document.querySelectorAll('[data-status-label]')];
@@ -83,6 +83,11 @@ const glossary = {
     title: 'Parent',
     description: 'The router an end device is attached to. A child talks to the mesh only through its parent, which buffers traffic for it while it sleeps.',
     why: 'A child picks its parent when it attaches and stays until the link fails, so a weak parent link persists until the device re-attaches. Routers have no parent.'
+  },
+  'channel-noise': {
+    title: 'Channel noise',
+    description: 'For about ten seconds the border router repeatedly listens briefly on each of the sixteen 2.4 GHz channels. The bar is the strongest signal heard on a channel across all those passes — from Wi-Fi, Bluetooth, Zigbee and other Thread networks alike — and the line is the typical level. Lower is quieter.',
+    why: 'Thread shares the band with Wi-Fi. Channels 15, 20, 25 and 26 sit between the three common Wi-Fi channels, which is why they are the usual choices. Compare bars within one measurement rather than reading them as absolutes: the figure depends on how long the radio listened. Changing channel re-attaches every device, so only move for a clear difference.'
   },
   'omr-ipv6': {
     title: 'OMR IPv6 address',
@@ -415,6 +420,155 @@ function renderNetworkScan(data) {
     }));
   }
   updateRefreshLabel();
+}
+
+// Wi-Fi overlap: each 20 MHz Wi-Fi channel covers four 802.15.4 channels. The
+// gaps between Wi-Fi 1, 6 and 11 are Thread channels 15, 20, 25 and 26.
+const WIFI_BANDS = [{ label: 'Wi-Fi 1', from: 11, to: 14 }, { label: 'Wi-Fi 6', from: 16, to: 19 }, { label: 'Wi-Fi 11', from: 21, to: 24 }];
+
+// channelLevel grades a channel against the quietest in the same scan; the
+// absolute figure depends on dwell time, so only the spread is meaningful.
+function channelLevel(rssi, quietest) {
+  const delta = rssi - quietest;
+  return delta <= 3 ? 'quiet' : delta > 10 ? 'busy' : 'moderate';
+}
+
+function renderChannelScan(data) {
+  state.channelScan = data;
+  const channels = (data.channels || []).slice().sort((a, b) => a.channel - b.channel);
+  const status = data.status || 'unavailable';
+  const note = document.getElementById('channelScanNote');
+  const chart = document.getElementById('channelChart');
+  note.classList.remove('scan-error');
+
+  if (status !== 'available' || !channels.length) {
+    note.classList.add('scan-error');
+    note.querySelector('p').textContent = data.error || 'The channel measurement could not be completed.';
+    note.classList.remove('hidden');
+    const empty = document.createElement('div');
+    empty.className = 'inventory-empty';
+    const title = document.createElement('strong');
+    title.textContent = 'Channel measurement unavailable';
+    const text = document.createElement('p');
+    text.textContent = status === 'unsupported' ? 'Neither the daemon socket nor this OTBR build offers an energy scan.' : 'Try again in a moment.';
+    empty.append(title, text);
+    chart.replaceChildren(empty);
+    return;
+  }
+
+  const quietest = Math.min(...channels.map(ch => ch.maxRssi));
+  const current = data.currentChannel ?? (state.overview?.rcpChannel != null ? Number(state.overview.rcpChannel) : null);
+  // The current channel's loudest reading includes this network's own frames,
+  // which no other channel can show, so it is graded on its typical level.
+  const typicals = channels.filter(ch => ch.typicalRssi != null).map(ch => ch.typicalRssi);
+  const quietestTypical = typicals.length ? Math.min(...typicals) : null;
+  const gradeOf = ch => (ch.channel === current && quietestTypical != null && ch.typicalRssi != null)
+    ? channelLevel(ch.typicalRssi, quietestTypical)
+    : channelLevel(ch.maxRssi, quietest);
+  const heard = new Map();
+  (state.networkScan?.items || []).forEach(network => {
+    if (network.channel != null) heard.set(Number(network.channel), (heard.get(Number(network.channel)) || 0) + 1);
+  });
+
+  const columns = channels.map(ch => {
+    const level = gradeOf(ch);
+    const column = document.createElement('div');
+    column.className = `channel-col ${level} ${ch.channel === current ? 'current' : ''}`.trim();
+    const rssi = document.createElement('span');
+    rssi.className = 'channel-rssi';
+    rssi.textContent = String(ch.maxRssi);
+    const track = document.createElement('div');
+    track.className = 'channel-track';
+    const bar = document.createElement('div');
+    bar.className = 'channel-bar';
+    // Absolute scale so two measurements look alike: -105 dBm is the floor, -40 the top.
+    const heightFor = rssi => Math.round(Math.min(1, Math.max(0.04, (rssi + 105) / 65)) * 100);
+    bar.style.height = `${heightFor(ch.maxRssi)}%`;
+    track.append(bar);
+    // The bar is the loudest reading across the sweeps; the line is the typical
+    // one, so a single burst reads as a tall bar with a low line.
+    if (ch.typicalRssi != null) {
+      const typical = document.createElement('span');
+      typical.className = 'channel-typical';
+      typical.style.bottom = `${heightFor(ch.typicalRssi)}%`;
+      track.append(typical);
+    }
+    const number = document.createElement('span');
+    number.className = 'channel-num';
+    number.textContent = String(ch.channel);
+    const dot = document.createElement('span');
+    const count = heard.get(ch.channel) || 0;
+    dot.className = `channel-heard ${count ? '' : 'none'}`.trim();
+    if (count) dot.title = `${count} Thread network${count === 1 ? '' : 's'} heard on this channel in the last scan`;
+    column.append(rssi, track, number, dot);
+    const overlap = WIFI_BANDS.find(band => ch.channel >= band.from && ch.channel <= band.to);
+    column.title = `Channel ${ch.channel}: loudest ${ch.maxRssi} dBm${ch.typicalRssi != null ? `, typically ${ch.typicalRssi} dBm` : ''} (${level})${overlap ? `, overlaps ${overlap.label}` : ', between Wi-Fi channels'}${ch.channel === current ? ' — current channel' : ''}`;
+    return column;
+  });
+
+  const wifi = document.createElement('div');
+  wifi.className = 'channel-wifi';
+  const first = channels[0].channel;
+  WIFI_BANDS.forEach(band => {
+    const span = document.createElement('span');
+    span.textContent = band.label;
+    span.style.gridColumn = `${band.from - first + 1} / span ${band.to - band.from + 1}`;
+    wifi.append(span);
+  });
+
+  const legend = document.createElement('div');
+  legend.className = 'channel-legend';
+  const legendItems = [['', 'Quiet (within 3 dB of the quietest)'], ['moderate', 'Moderate'], ['busy', 'Busy (more than 10 dB above)'], ['heard', 'Thread network heard here']];
+  if (channels.some(ch => ch.typicalRssi != null)) legendItems.push(['typical', 'Line: typical level · bar: loudest']);
+  legendItems.forEach(([cls, label]) => {
+    const item = document.createElement('span');
+    const swatch = document.createElement('i');
+    swatch.className = cls;
+    item.append(swatch, label);
+    legend.append(item);
+  });
+
+  chart.replaceChildren(...columns, wifi, legend);
+
+  const ranked = channels.slice().sort((a, b) => a.maxRssi - b.maxRssi || a.channel - b.channel).slice(0, 3).map(ch => ch.channel);
+  let summary = `Quietest: ${ranked.slice(0, -1).join(', ')} and ${ranked[ranked.length - 1]}.`;
+  if (data.sweeps > 1) summary = `Loudest of ${data.sweeps} sweeps; candidates ranked by their worst reading. ` + summary;
+  const currentEntry = channels.find(ch => ch.channel === current);
+  if (currentEntry && quietestTypical != null && currentEntry.typicalRssi != null) {
+    const delta = currentEntry.typicalRssi - quietestTypical;
+    summary += delta <= 3 ? ` Your network is on channel ${current}, which is typically at the noise floor, so it is fine — its loudest reading includes your own devices' traffic, which no other channel can show.`
+      : delta > 10 ? ` Your network is on channel ${current}, typically ${delta} dB above the quietest, so it is noisy most of the time — worth considering a change, though every device re-attaches afterwards.`
+      : ` Your network is on channel ${current}, typically ${delta} dB above the quietest; not worth a change on its own.`;
+  } else if (currentEntry) {
+    const delta = currentEntry.maxRssi - quietest;
+    summary += delta <= 3 ? ` Your network is on channel ${current}, one of the quietest.`
+      : delta > 10 ? ` Your network is on channel ${current}, ${delta} dB noisier than the quietest — worth considering a change, though every device re-attaches afterwards.`
+      : ` Your network is on channel ${current}, ${delta} dB above the quietest; not worth a change on its own.`;
+  }
+  note.querySelector('p').textContent = summary;
+  note.classList.remove('hidden');
+  updateRefreshLabel();
+}
+
+async function scanChannels() {
+  if (state.channelScanBusy) return;
+  state.channelScanBusy = true;
+  const button = document.getElementById('scanChannelsButton');
+  button.disabled = true;
+  button.classList.add('scanning');
+  button.lastChild.textContent = ' Measuring (about 10 s)…';
+  try {
+    const response = await fetch('/api/v1/channels', { cache: 'no-store' });
+    const payload = await response.json();
+    renderChannelScan(payload.data);
+  } catch (error) {
+    renderChannelScan({ status: 'unavailable', channels: [], error: 'The measurement request did not complete.' });
+  } finally {
+    state.channelScanBusy = false;
+    button.disabled = false;
+    button.classList.remove('scanning');
+    button.lastChild.textContent = ' Measure';
+  }
 }
 
 async function scanNetworks() {
@@ -1526,6 +1680,7 @@ function showToast(message) {
 
 document.getElementById('refreshButton').addEventListener('click', () => loadData(true));
 document.getElementById('scanNetworksButton').addEventListener('click', scanNetworks);
+document.getElementById('scanChannelsButton').addEventListener('click', scanChannels);
 document.getElementById('refreshHistoryButton').addEventListener('click', loadHistory);
 document.getElementById('termClose').addEventListener('click', () => closeTerm(true));
 document.addEventListener('keydown', event => {

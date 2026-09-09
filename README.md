@@ -42,6 +42,7 @@ The rest follows from that gap:
 - Diagnostics view of OpenThread's own event history — attachments, departures, role and partition changes — covering time before the dashboard was running
 - Reachability testing from the border router, which can reach mesh-local addresses a browser cannot
 - On-demand scan of nearby Thread networks with the current network highlighted
+- Channel noise measurement: about ten seconds of repeated sweeps over the 16 channels, showing the loudest and typical signal on each, graded against the quietest, with Wi-Fi overlap marked and the current channel assessed
 - Built-in Thread guide and contextual explanations for terms such as RLOC16, partitions, and OMR addressing
 - Dark and light themes, responsive layout for desktop and tablet
 
@@ -58,7 +59,7 @@ Every destructive action is confirmed in a dialog before it is sent.
 **Assistant access** (MCP)
 
 - Built-in Model Context Protocol server at `/mcp`, no extra process or configuration
-- Six tools covering the network summary, device list, topology, event history, reachability testing, and nearby-network scan
+- Seven tools covering the network summary, device list, topology, event history, reachability testing, nearby-network scan and channel noise
 - Results shaped for a language model: device names instead of hex, parents by name, ages in seconds, topology nested by router
 - Read-only by design — no network writes and no credentials over MCP
 
@@ -130,6 +131,7 @@ Everything the dashboard shows comes from one of two channels. The REST API work
 | Device inventory — *fallback only, a cache* | `GET /api/devices` |
 | Topology and child attachments — *fallback only, a cache* | `GET /api/diagnostics` |
 | Mesh discovery sweep to refresh those caches — *fallback only* | `POST /api/actions` |
+| Channel energy scan — *fallback only* | `POST /api/actions` (`getEnergyScanTask`), polled at `GET /api/actions/{id}`, result from `GET /api/diagnostics/{id}` |
 | **All network changes**: form, join, join-from-TLV, enable, disable, leave, restore | `PUT`/`DELETE /node/state`, `PUT`/`DELETE /node/dataset/active` |
 
 **Over the daemon socket** (`--otbr-socket`, border router only)
@@ -146,11 +148,14 @@ Everything the dashboard shows comes from one of two channels. The REST API work
 | The border router's own addresses | `ipaddr`, `ipaddr mleid` |
 | Which address is off-mesh routable | `br omrprefix` |
 | Nearby Thread networks, with names and extended PAN IDs | `discover`, falling back to `scan` |
+| Peak signal per channel, for the channel-noise chart | `scan energy`, repeated for about ten seconds (default dwell time only — see below) |
 | Runtime details: OpenThread and RCP versions, API version, channel, transmit power, EUI-64, PAN ID, interface state | `version`, `version api`, `rcp version`, `channel`, `txpower`, `eui64`, `panid`, `state` |
 | Event history: role and partition changes, device attachments and departures | `history netinfo`, `history neighbor` |
 | Reachability test | `ping` |
 
 **Neither channel** supplies the last two rows of the runtime group when otbr-web is running instead of the socket — see *Optional runtime details* above.
+
+One hazard is worth knowing. The energy scan is run only with the firmware's default dwell time. A 500 ms per-channel dwell hung the radio co-processor on the reference border router (a Silicon Labs EFR32 on an SMLIGHT SLZB-07): the RCP stopped answering, `otbr-agent` aborted, and only unplugging the dongle brought it back. The default dwell has been exercised repeatedly without incident, and the app offers no way to lengthen it. To see past the snapshot a short listen gives, the app instead repeats the safe sweep for about ten seconds with pauses between passes, and keeps the loudest and the median reading per channel.
 
 Two costs are worth knowing. The `meshdiag` queries are transactions with other routers, so they are cached for 30 seconds; ages and signal come from local tables on every poll and cost no radio time. And the socket serves one command at a time, so the app and an interactive `ot-ctl` session compete for it.
 
@@ -194,6 +199,7 @@ The browser talks only to this API; it never contacts OTBR directly. Responses a
 | `GET /api/v1/topology` | Router adjacency and child attachments from network diagnostics |
 | `GET /api/v1/capabilities` | Which optional OTBR endpoints this build supports |
 | `GET /api/v1/networks` | Performs an on-demand active scan for nearby networks (can take several seconds) |
+| `GET /api/v1/channels` | Repeated energy scans over about ten seconds; `sweeps`, `currentChannel` and `channels[]` of `{channel, maxRssi, typicalRssi}` |
 | `GET /api/v1/network` | Interface state and the credential-masked active dataset, plus backup metadata |
 | `GET /api/v1/network/credentials` | The unmasked network key, PSKc, and dataset TLV |
 | `GET /api/v1/history` | OpenThread's recorded role, partition, and neighbour events, with user names overlaid; needs the daemon socket |
@@ -255,8 +261,9 @@ No token or header is required. The client must be on the same LAN as the dashbo
 | `get_history` | `device` (name, extended address or RLOC16), `limit` (default 30) | OpenThread's own event log, newest first, with each entry's age in seconds: role and partition changes for the border router, and devices attaching or detaching with the signal at the time | Daemon socket |
 | `ping_device` | `device` (name, extended address, RLOC16 or IPv6 address), `count` (1–10, default 3) | Sent and received counts and min/average/max round trip, plus which address was used. Prefers the mesh-local address, which survives roaming | Daemon socket |
 | `scan_networks` | — | Other Thread networks on the air: name, extended PAN ID, PAN ID, channel and the beaconing device's address | Socket or `otbr-web` |
+| `scan_channels` | — | About ten seconds of sweeps: loudest and typical signal per channel, each graded quiet, moderate or busy against the quietest, its Wi-Fi overlap, the three quietest channels, and a one-sentence assessment of the current channel | Socket or REST |
 
-All six tools are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
+All seven tools are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
 
 A device can be named any way the dashboard shows it. `ping_device` with `"kitchen sensor"` matches the label you gave it (case-insensitively, and by unique substring), `"0x0401"` matches an RLOC16, and a bare IPv6 address is used as given. When no device matches, the error says so and points at `list_devices`.
 
@@ -308,6 +315,7 @@ The endpoint has the same posture as the rest of the API: no authentication, tru
 - **A ping takes a long time.** Sleepy end devices answer only when they next wake. The tool waits up to 60 seconds.
 
 ## OTBR compatibility notes
+
 
 The adapter normalizes several OTBR REST API variants. Behaviour observed on real firmware that shaped the design:
 

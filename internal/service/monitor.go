@@ -33,6 +33,12 @@ type DeviceDiscoverer interface {
 	RefreshMesh(ctx context.Context, routers []string) error
 }
 
+// EnergyScanner is the optional channel-noise measurement. It is on demand, like
+// the network scan, and is not polled: it costs radio time on every channel.
+type EnergyScanner interface {
+	EnergyScan(ctx context.Context) (*model.EnergyScan, error)
+}
+
 type Monitor struct {
 	provider     ThreadProvider
 	pollEvery    time.Duration
@@ -199,6 +205,16 @@ func (m *Monitor) TopologySnapshot() model.Topology {
 
 func (m *Monitor) ScanNetworks(ctx context.Context) (*model.NetworkScan, error) {
 	return m.provider.ScanNetworks(ctx)
+}
+
+func (m *Monitor) EnergyScan(ctx context.Context) (*model.EnergyScan, error) {
+	if scanner, ok := m.provider.(EnergyScanner); ok {
+		return scanner.EnergyScan(ctx)
+	}
+	return &model.EnergyScan{
+		Status: "unsupported", Source: "energy scan", ScannedAt: time.Now().UTC(),
+		Channels: []model.ChannelEnergy{}, Error: "this provider cannot measure channel energy",
+	}, nil
 }
 
 func (m *Monitor) Snapshot() model.Overview {

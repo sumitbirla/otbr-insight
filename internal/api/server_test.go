@@ -32,6 +32,52 @@ func (f *fakeSnapshotter) ScanNetworks(context.Context) (*model.NetworkScan, err
 }
 func (f *fakeSnapshotter) CapabilitySnapshot() model.Capabilities { return model.Capabilities{} }
 
+// fakeEnergySnapshotter adds the optional energy scan, which registers the channels route.
+type fakeEnergySnapshotter struct {
+	fakeSnapshotter
+	scan *model.EnergyScan
+	err  error
+}
+
+func (f *fakeEnergySnapshotter) EnergyScan(context.Context) (*model.EnergyScan, error) {
+	return f.scan, f.err
+}
+
+func TestChannelsRouteNeedsAnEnergyScanner(t *testing.T) {
+	plain := Handler(&fakeSnapshotter{}, &fakeNames{names: map[string]string{}}, &fakeController{}, &fakeBackups{}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rec := httptest.NewRecorder()
+	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("without a scanner: status %d, want 404", rec.Code)
+	}
+
+	channel := 25
+	withScan := Handler(&fakeEnergySnapshotter{scan: &model.EnergyScan{Status: "available", CurrentChannel: &channel,
+		Channels: []model.ChannelEnergy{{Channel: 11, MaxRSSI: -80}, {Channel: 25, MaxRSSI: -91}}}},
+		&fakeNames{names: map[string]string{}}, &fakeController{}, &fakeBackups{}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rec = httptest.NewRecorder()
+	withScan.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("with a scanner: status %d body %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data model.EnergyScan `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.Status != "available" || len(body.Data.Channels) != 2 || body.Data.CurrentChannel == nil || *body.Data.CurrentChannel != 25 {
+		t.Fatalf("payload = %+v", body.Data)
+	}
+
+	failing := Handler(&fakeEnergySnapshotter{err: errors.New("radio busy")}, &fakeNames{names: map[string]string{}}, &fakeController{}, &fakeBackups{}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rec = httptest.NewRecorder()
+	failing.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil))
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "radio busy") {
+		t.Fatalf("failing scanner: status %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeNames struct{ names map[string]string }
 
 func (f *fakeNames) Enabled() bool               { return true }

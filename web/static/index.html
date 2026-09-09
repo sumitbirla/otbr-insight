@@ -173,6 +173,18 @@
               <div class="inventory-empty"><span class="network-scan-symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span><strong>No scan performed</strong><p>Select “Scan now” to look for Thread networks in radio range.</p></div>
             </div>
           </section>
+
+          <section class="section-head channel-head"><div><h2 data-term="channel-noise">Channel noise</h2></div>
+            <div class="network-intro-actions channel-actions">
+              <button class="scan-button" id="scanChannelsButton" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M6 16V9"/><path d="M11 16V4"/><path d="M16 16v-6"/><path d="M21 16v-3"/></svg></span>Measure</button>
+            </div>
+          </section>
+          <section class="inventory-panel card channel-panel">
+            <div class="inventory-note neutral hidden" id="channelScanNote" role="status"><span>i</span><p></p></div>
+            <div class="channel-chart" id="channelChart" aria-live="polite" aria-label="Peak signal heard per channel">
+              <div class="inventory-empty"><strong>No measurement yet</strong><p>Select “Measure” to listen briefly on each of the 16 channels and compare how busy they are.</p></div>
+            </div>
+          </section>
         </section>
 
 

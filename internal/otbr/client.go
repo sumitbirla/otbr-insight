@@ -38,6 +38,7 @@ type Client struct {
 	baseURL               *url.URL
 	legacyWebURL          *url.URL
 	scanner               NetworkScanner
+	energy                EnergyScanner
 	mesh                  MeshReader
 	status                StatusReader
 	pinger                Pinger

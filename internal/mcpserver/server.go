@@ -65,11 +65,17 @@ const quietAfter = 10 * time.Minute
 // wakes; the REST route uses the same figure.
 const pingTimeout = 60 * time.Second
 
+// EnergyScanner measures channel noise; optional, satisfied by service.Monitor.
+type EnergyScanner interface {
+	EnergyScan(ctx context.Context) (*model.EnergyScan, error)
+}
+
 type server struct {
 	data    Snapshots
 	labels  Labels
 	pinger  Pinger
 	history HistoryProvider
+	energy  EnergyScanner
 	logger  *slog.Logger
 }
 
@@ -83,6 +89,7 @@ func Handler(data Snapshots, labels Labels, provider any, logger *slog.Logger) h
 	s := &server{data: data, labels: labels, logger: logger}
 	s.pinger, _ = provider.(Pinger)
 	s.history, _ = provider.(HistoryProvider)
+	s.energy, _ = data.(EnergyScanner)
 
 	// The SDK logs every session at INFO, and in stateless mode every request is
 	// a session, so it only gets to speak up about problems.
@@ -146,6 +153,13 @@ func (s *server) register(m *mcp.Server) {
 		Description: "Actively scan for other Thread networks on the air (name, PAN ID, channel, signal). Takes several seconds. Useful for checking channel overlap or whether a neighbour's network is present.",
 		Annotations: readOnly("Scan for networks"),
 	}, s.scanNetworks)
+	if s.energy != nil {
+		mcp.AddTool(m, &mcp.Tool{
+			Name:        "scan_channels",
+			Description: "Measure radio noise on every 2.4 GHz channel (11-26) from the border router over about ten seconds of repeated sweeps, and rank them: the loudest and typical signal heard on each, which Wi-Fi channel overlaps it, and the quietest choices. Ranking uses the loudest reading (worst case). Use it to judge whether the current channel is a good one. Takes about ten seconds.",
+			Annotations: readOnly("Scan channel noise"),
+		}, s.scanChannels)
+	}
 	if s.history != nil {
 		mcp.AddTool(m, &mcp.Tool{
 			Name:        "get_history",
@@ -465,6 +479,161 @@ func (s *server) scanNetworks(ctx context.Context, _ *mcp.CallToolRequest, _ str
 		return nil, nil, fmt.Errorf("scan unavailable: %w", err)
 	}
 	return nil, scan, nil
+}
+
+// --- scan_channels ---------------------------------------------------------
+
+type channelView struct {
+	Channel     int    `json:"channel"`
+	MaxRSSI     int    `json:"maxRssi"`
+	TypicalRSSI *int   `json:"typicalRssi,omitempty"`
+	Level       string `json:"level"`
+	WiFiOverlap string `json:"wifiOverlap,omitempty"`
+	Current     bool   `json:"current,omitempty"`
+}
+
+type channelScanView struct {
+	Status         string        `json:"status"`
+	Source         string        `json:"source,omitempty"`
+	ScannedAt      time.Time     `json:"scannedAt"`
+	Sweeps         int           `json:"sweeps"`
+	CurrentChannel *int          `json:"currentChannel,omitempty"`
+	Quietest       []int         `json:"quietest"`
+	Channels       []channelView `json:"channels"`
+	Summary        string        `json:"summary,omitempty"`
+	Error          string        `json:"error,omitempty"`
+}
+
+func (s *server) scanChannels(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, channelScanView, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	scan, err := s.energy.EnergyScan(ctx)
+	if err != nil {
+		return nil, channelScanView{}, fmt.Errorf("channel scan failed: %w", err)
+	}
+	view := channelScanView{Status: scan.Status, Source: scan.Source, ScannedAt: scan.ScannedAt, Sweeps: scan.Sweeps, CurrentChannel: scan.CurrentChannel,
+		Quietest: []int{}, Channels: []channelView{}, Error: scan.Error}
+	if len(scan.Channels) == 0 {
+		return nil, view, nil
+	}
+	ranked := rankChannels(scan.Channels)
+	quietestRSSI := ranked[0].MaxRSSI
+	quietestTypical, hasTypical := quietestTypicalOf(scan.Channels)
+	for _, ch := range scan.Channels {
+		current := scan.CurrentChannel != nil && *scan.CurrentChannel == ch.Channel
+		level := channelLevel(ch.MaxRSSI, quietestRSSI)
+		// The current channel's peak includes this network's own frames, which the
+		// other channels cannot have, so it is graded on its typical level instead.
+		if current && hasTypical && ch.TypicalRSSI != nil {
+			level = channelLevel(*ch.TypicalRSSI, quietestTypical)
+		}
+		view.Channels = append(view.Channels, channelView{
+			Channel: ch.Channel, MaxRSSI: ch.MaxRSSI, TypicalRSSI: ch.TypicalRSSI, Level: level,
+			WiFiOverlap: wifiOverlap(ch.Channel), Current: current,
+		})
+	}
+	for _, ch := range ranked[:min(3, len(ranked))] {
+		view.Quietest = append(view.Quietest, ch.Channel)
+	}
+	view.Summary = channelSummary(scan, ranked)
+	return nil, view, nil
+}
+
+// rankChannels orders channels quietest first, lowest channel number breaking ties.
+func rankChannels(channels []model.ChannelEnergy) []model.ChannelEnergy {
+	ranked := append([]model.ChannelEnergy(nil), channels...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].MaxRSSI != ranked[j].MaxRSSI {
+			return ranked[i].MaxRSSI < ranked[j].MaxRSSI
+		}
+		return ranked[i].Channel < ranked[j].Channel
+	})
+	return ranked
+}
+
+// channelLevel grades a channel against the quietest one in the same scan. The
+// absolute figure depends on how long the radio listened, so only the spread
+// within a scan is meaningful: within 3 dB of the floor is quiet, more than
+// 10 dB above it is busy.
+func channelLevel(rssi, quietest int) string {
+	switch delta := rssi - quietest; {
+	case delta <= 3:
+		return "quiet"
+	case delta > 10:
+		return "busy"
+	default:
+		return "moderate"
+	}
+}
+
+// wifiOverlap names the 2.4 GHz Wi-Fi channel whose 20 MHz footprint covers an
+// 802.15.4 channel. Channels 15, 20, 25 and 26 fall in the gaps between the three
+// non-overlapping Wi-Fi channels, which is why they are the usual recommendations.
+func wifiOverlap(channel int) string {
+	switch {
+	case channel >= 11 && channel <= 14:
+		return "Wi-Fi 1"
+	case channel >= 16 && channel <= 19:
+		return "Wi-Fi 6"
+	case channel >= 21 && channel <= 24:
+		return "Wi-Fi 11"
+	default:
+		return ""
+	}
+}
+
+// quietestTypicalOf returns the lowest median across channels, when medians exist.
+func quietestTypicalOf(channels []model.ChannelEnergy) (int, bool) {
+	best, found := 0, false
+	for _, ch := range channels {
+		if ch.TypicalRSSI != nil && (!found || *ch.TypicalRSSI < best) {
+			best, found = *ch.TypicalRSSI, true
+		}
+	}
+	return best, found
+}
+
+// channelSummary ranks candidates by their loudest reading — a channel worth
+// moving to must be clean even at its worst — but judges the current channel by
+// its typical level, because its loudest reading includes this network's own
+// traffic and would otherwise argue for leaving a perfectly good channel.
+func channelSummary(scan *model.EnergyScan, ranked []model.ChannelEnergy) string {
+	names := make([]string, 0, 3)
+	for _, ch := range ranked[:min(3, len(ranked))] {
+		names = append(names, strconv.Itoa(ch.Channel))
+	}
+	summary := "Quietest channels by loudest reading: " + strings.Join(names, ", ") + "."
+	if scan.CurrentChannel == nil {
+		return summary
+	}
+	quietestTypical, hasTypical := quietestTypicalOf(scan.Channels)
+	for _, ch := range scan.Channels {
+		if ch.Channel != *scan.CurrentChannel {
+			continue
+		}
+		if hasTypical && ch.TypicalRSSI != nil {
+			delta := *ch.TypicalRSSI - quietestTypical
+			switch {
+			case delta <= 3:
+				summary += fmt.Sprintf(" The current channel %d is typically at the noise floor, so it is fine; its loudest reading includes this network's own traffic, which the other channels cannot show.", ch.Channel)
+			case delta > 10:
+				summary += fmt.Sprintf(" The current channel %d is typically %d dB above the quietest, so it is noisy most of the time; a change is worth considering, though moving channels re-attaches every device.", ch.Channel, delta)
+			default:
+				summary += fmt.Sprintf(" The current channel %d is typically %d dB above the quietest, which is not worth a change on its own.", ch.Channel, delta)
+			}
+			return summary
+		}
+		delta := ch.MaxRSSI - ranked[0].MaxRSSI
+		switch {
+		case delta <= 3:
+			summary += fmt.Sprintf(" The current channel %d is among the quietest.", ch.Channel)
+		case delta > 10:
+			summary += fmt.Sprintf(" The current channel %d is %d dB noisier than the quietest; a change is worth considering, though moving channels re-attaches every device.", ch.Channel, delta)
+		default:
+			summary += fmt.Sprintf(" The current channel %d is %d dB above the quietest, which is not worth a change on its own.", ch.Channel, delta)
+		}
+	}
+	return summary
 }
 
 // --- get_history -----------------------------------------------------------

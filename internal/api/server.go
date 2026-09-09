@@ -100,6 +100,25 @@ func Handler(data Snapshotter, names NameStore, control NetworkController, backu
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": scan})
 	})
+	// Channel energy scan, on demand like the network scan. Registered only when
+	// the data source can perform one, so a bare Snapshotter needs nothing new.
+	if scanner, ok := data.(interface {
+		EnergyScan(context.Context) (*model.EnergyScan, error)
+	}); ok {
+		mux.HandleFunc("GET /api/v1/channels", func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+			defer cancel()
+			scan, err := scanner.EnergyScan(ctx)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"data": model.EnergyScan{
+					Status: "unavailable", Channels: []model.ChannelEnergy{}, Source: "energy scan",
+					ScannedAt: time.Now().UTC(), Error: err.Error(),
+				}})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"data": scan})
+		})
+	}
 	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		overview := data.Snapshot()
 		status := http.StatusOK
@@ -502,7 +521,7 @@ func requestLog(next http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		next.ServeHTTP(w, r)
-		if r.URL.Path != "/api/v1/overview" && r.URL.Path != "/api/v1/capabilities" && r.URL.Path != "/api/v1/devices" && r.URL.Path != "/api/v1/topology" && r.URL.Path != "/api/v1/networks" {
+		if r.URL.Path != "/api/v1/overview" && r.URL.Path != "/api/v1/capabilities" && r.URL.Path != "/api/v1/devices" && r.URL.Path != "/api/v1/topology" && r.URL.Path != "/api/v1/networks" && r.URL.Path != "/api/v1/channels" {
 			logger.Debug("HTTP request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
 		}
 	})

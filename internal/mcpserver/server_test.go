@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -25,6 +26,14 @@ type fakeData struct {
 	inventory model.DeviceInventory
 	topology  model.Topology
 	scanErr   error
+	energy    *model.EnergyScan
+}
+
+func (f *fakeData) EnergyScan(context.Context) (*model.EnergyScan, error) {
+	if f.energy == nil {
+		return nil, errors.New("radio busy")
+	}
+	return f.energy, nil
 }
 
 func (f *fakeData) Snapshot() model.Overview              { return f.overview }
@@ -137,11 +146,11 @@ func TestToolsRegisteredByCapability(t *testing.T) {
 		return out
 	}
 	full := names(connect(t, fixture(time.Now()), fakeLabels{}, &fakeProvider{}))
-	if got := strings.Join(full, ","); got != "get_history,get_network,get_topology,list_devices,ping_device,scan_networks" {
+	if got := strings.Join(full, ","); got != "get_history,get_network,get_topology,list_devices,ping_device,scan_channels,scan_networks" {
 		t.Fatalf("tools with socket provider: %s", got)
 	}
 	restOnly := names(connect(t, fixture(time.Now()), fakeLabels{}, struct{}{}))
-	if got := strings.Join(restOnly, ","); got != "get_network,get_topology,list_devices,scan_networks" {
+	if got := strings.Join(restOnly, ","); got != "get_network,get_topology,list_devices,scan_channels,scan_networks" {
 		t.Fatalf("tools without socket provider: %s", got)
 	}
 }
@@ -316,6 +325,69 @@ func TestHistoryFiltersAndNames(t *testing.T) {
 	if result := call(t, session, "get_history", nil, nil); !result.IsError {
 		t.Fatal("history failure should surface as a tool error")
 	}
+}
+
+func TestScanChannelsRanksAndGrades(t *testing.T) {
+	data := connectFixture(t)
+	current := 25
+	data.energy = &model.EnergyScan{Status: "available", Source: "test", CurrentChannel: &current, Channels: []model.ChannelEnergy{
+		{Channel: 11, MaxRSSI: -80}, {Channel: 12, MaxRSSI: -68}, {Channel: 15, MaxRSSI: -81}, {Channel: 20, MaxRSSI: -84},
+		{Channel: 22, MaxRSSI: -70}, {Channel: 25, MaxRSSI: -83}, {Channel: 26, MaxRSSI: -84},
+	}}
+	session := connect(t, data, fakeLabels{}, struct{}{})
+	var out channelScanView
+	call(t, session, "scan_channels", nil, &out)
+	if strings.Join(intStrings(out.Quietest), ",") != "20,26,25" {
+		t.Fatalf("quietest = %v", out.Quietest)
+	}
+	levels := map[int]string{}
+	for _, ch := range out.Channels {
+		levels[ch.Channel] = ch.Level
+		if ch.Channel == 25 && !ch.Current {
+			t.Fatal("current channel not flagged")
+		}
+		if ch.Channel == 12 && ch.WiFiOverlap != "Wi-Fi 1" || ch.Channel == 25 && ch.WiFiOverlap != "" || ch.Channel == 22 && ch.WiFiOverlap != "Wi-Fi 11" {
+			t.Fatalf("wifi overlap: %+v", ch)
+		}
+	}
+	if levels[20] != "quiet" || levels[25] != "quiet" || levels[11] != "moderate" || levels[12] != "busy" || levels[22] != "busy" {
+		t.Fatalf("levels = %v", levels)
+	}
+	if !strings.Contains(out.Summary, "channel 25 is among the quietest") {
+		t.Fatalf("summary = %q", out.Summary)
+	}
+
+	// Over repeated sweeps the current channel's peak includes this network's own
+	// frames; it is graded and assessed on its typical level instead.
+	floor, own := -81, -80
+	data.energy = &model.EnergyScan{Status: "available", Sweeps: 20, CurrentChannel: &current, Channels: []model.ChannelEnergy{
+		{Channel: 24, MaxRSSI: -80, TypicalRSSI: &floor}, {Channel: 25, MaxRSSI: -62, TypicalRSSI: &own}, {Channel: 20, MaxRSSI: -31, TypicalRSSI: &floor},
+	}}
+	call(t, session, "scan_channels", nil, &out)
+	for _, ch := range out.Channels {
+		if ch.Channel == 25 && ch.Level != "quiet" {
+			t.Fatalf("current channel graded %q by its peak; want quiet by its typical level", ch.Level)
+		}
+		if ch.Channel == 20 && ch.Level != "busy" {
+			t.Fatalf("channel 20 graded %q, want busy by its peak", ch.Level)
+		}
+	}
+	if out.Quietest[0] != 24 || !strings.Contains(out.Summary, "channel 25 is typically at the noise floor") || !strings.Contains(out.Summary, "own traffic") {
+		t.Fatalf("quietest %v summary %q", out.Quietest, out.Summary)
+	}
+
+	data.energy = nil
+	if result := call(t, session, "scan_channels", nil, nil); !result.IsError {
+		t.Fatal("scan failure should be a tool error")
+	}
+}
+
+func intStrings(values []int) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = fmt.Sprint(v)
+	}
+	return out
 }
 
 func TestScanNetworks(t *testing.T) {

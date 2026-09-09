@@ -52,6 +52,8 @@ func main() {
 	if strings.TrimSpace(cfg.OTBRSocket) != "" {
 		socket := otctl.New(cfg.OTBRSocket, 30*time.Second)
 		client.SetNetworkScanner(socket)
+		// Channel energy scans, answered synchronously where REST needs an action.
+		client.SetEnergyScanner(socket)
 		// Live device and topology data, preferred over OTBR's REST caches.
 		client.SetMeshReader(socket)
 		// Runtime fields otbr-web used to supply; the socket has them either way.

@@ -225,3 +225,32 @@ type History struct {
 	Network   []NetworkHistoryEntry  `json:"network"`
 	Neighbors []NeighborHistoryEntry `json:"neighbors"`
 }
+
+// ChannelEnergy is the peak RSSI heard on one IEEE 802.15.4 channel during an
+// energy-detect scan. It measures everything on the air — Wi-Fi, Bluetooth, other
+// Thread and Zigbee networks — not just Thread beacons.
+type ChannelEnergy struct {
+	Channel int `json:"channel"`
+	// MaxRSSI is the loudest reading across every sweep: the worst case, which is
+	// what choosing a channel should be judged on.
+	MaxRSSI int `json:"maxRssi"`
+	// TypicalRSSI is the median across sweeps, which separates a channel that is
+	// always busy from one that caught a single burst. Absent for a single sweep.
+	TypicalRSSI *int `json:"typicalRssi,omitempty"`
+}
+
+// EnergyScan is one pass over the 2.4 GHz channels, for choosing a quiet one.
+// The absolute figures depend on how long the radio listened per channel, so
+// channels are meaningfully compared with each other within one scan rather
+// than against a fixed threshold.
+type EnergyScan struct {
+	Status         string    `json:"status"`
+	Source         string    `json:"source"`
+	ScannedAt      time.Time `json:"scannedAt"`
+	DurationMs     int64     `json:"durationMs"`
+	CurrentChannel *int      `json:"currentChannel,omitempty"`
+	// Sweeps is how many passes over the channels were combined into Channels.
+	Sweeps   int             `json:"sweeps"`
+	Channels []ChannelEnergy `json:"channels"`
+	Error    string          `json:"error,omitempty"`
+}
