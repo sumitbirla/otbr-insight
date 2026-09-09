@@ -33,7 +33,7 @@ The rest follows from that gap:
 **Monitoring**
 
 - Mesh map of routers, end devices, and their parent links, built from OTBR network diagnostics, with a device inspector for each node
-- Searchable device list with role, RLOC16, extended address, OMR IPv6 address, link metrics, and last-seen time
+- Searchable device list with role, RLOC16, parent (by name), signal with retry rate beneath it, and last-seen time; addresses and the remaining details one click away in the expanded row
 - User-assigned device names, persisted locally and shown on both the map and the list
 - Network identity, border-router runtime, RCP radio, and IPv6 details in collapsible panels
 - Live status: online, network disabled, stale data, or OTBR offline, with the last valid snapshot kept while OTBR is unreachable

@@ -2,7 +2,7 @@
 // depend on it, and they must not drift from the CSS min-height.
 const TOPOLOGY_NODE_HEIGHT = 96;
 
-const state = { overview: null, devices: null, topology: null, networkScan: null, deviceMode: 'map', deviceQuery: '', roleFilter: 'all', topologySelectedId: '', busy: false, networkScanBusy: false, renamingExt: null, network: null };
+const state = { overview: null, devices: null, topology: null, networkScan: null, deviceMode: 'map', deviceQuery: '', roleFilter: 'all', topologySelectedId: '', expandedDevices: new Set(), busy: false, networkScanBusy: false, renamingExt: null, network: null };
 const fields = [...document.querySelectorAll('[data-field]')];
 const statusDots = [...document.querySelectorAll('[data-status-dot]')];
 const statusLabels = [...document.querySelectorAll('[data-status-label]')];
@@ -78,6 +78,11 @@ const glossary = {
     title: 'PAN ID',
     description: 'A 16-bit IEEE 802.15.4 identifier used by this Thread network on its current radio channel.',
     why: 'It helps radios distinguish nearby personal-area networks. It is a local network identifier, not a secret credential or a durable device identity.'
+  },
+  'parent': {
+    title: 'Parent',
+    description: 'The router an end device is attached to. A child talks to the mesh only through its parent, which buffers traffic for it while it sleeps.',
+    why: 'A child picks its parent when it attaches and stays until the link fails, so a weak parent link persists until the device re-attaches. Routers have no parent.'
   },
   'omr-ipv6': {
     title: 'OMR IPv6 address',
@@ -905,13 +910,20 @@ function renderDeviceRows() {
     container.replaceChildren(empty);
     return;
   }
+  const routers = (inventory.items || []).filter(isTopologyRouter);
   const nodes = [];
   filtered.forEach((device, index) => {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'device-row';
     row.setAttribute('role', 'row');
-    row.setAttribute('aria-expanded', 'false');
+    // The list is rebuilt on every poll because "last seen" moves each time, so
+    // an open row would fall shut within five seconds unless the choice outlives
+    // the element. It is keyed by device rather than position so it also
+    // survives the device moving in the list.
+    const expandKey = deviceExtendedAddress(device) || device.id || `#${index}`;
+    const expanded = state.expandedDevices.has(expandKey);
+    row.setAttribute('aria-expanded', String(expanded));
     row.setAttribute('aria-controls', `device-detail-${index}`);
 
     const primary = document.createElement('span');
@@ -937,21 +949,37 @@ function renderDeviceRows() {
     role.append(tag);
 
     const rloc = cell('RLOC16', device.rloc16 || '—', 'mono');
-    const omr = cell('OMR IPv6', device.omrIpv6Address || firstIPv6(device.ipv6Addresses) || '—', 'mono');
+    // Who the device hangs off is the one relational fact in the row; the OMR
+    // address it replaced is one click away in the expanded detail.
+    let parentText = '—';
+    if (!isTopologyRouter(device)) {
+      const attachment = topologyParent(device, routers);
+      parentText = attachment ? deviceLabel(attachment.device, parentFallback(attachment.device)) : device.parent || 'Unresolved';
+    }
+    const parent = cell('Parent', parentText);
     const linkText = device.rssi != null ? `${device.rssi} dBm` : device.linkQuality != null ? `LQI ${device.linkQuality}` : device.linkMargin != null ? `${device.linkMargin} dB` : 'Not reported';
     const link = cell('Link', linkText, linkText === 'Not reported' ? '' : 'link-value');
+    // Retries ride under the signal, flagged the same way as on the map card, so a
+    // link that looks strong by RSSI but is mostly retrying shows up without a click.
+    if (device.frameErrorRate != null) {
+      const retries = document.createElement('small');
+      retries.className = `device-retries ${linkIsStrained(device) ? 'link-strained' : ''}`.trim();
+      retries.textContent = `${(device.frameErrorRate * 100).toFixed(1)}% retried`;
+      link.append(retries);
+      link.title = `${linkText} · ${linkHealth(device)}`;
+    }
     const observedText = device.lastSeen ? relativeTime(new Date(device.lastSeen)) : device.firstSeen ? `Discovered ${relativeTime(new Date(device.firstSeen))}` : 'Not reported';
     const observed = cell('Observed', observedText);
-    row.append(primary, role, rloc, omr, link, observed);
+    row.append(primary, role, rloc, parent, link, observed);
 
     const detail = document.createElement('div');
-    detail.className = 'device-expanded';
+    detail.className = `device-expanded ${expanded ? 'open' : ''}`.trim();
     detail.id = `device-detail-${index}`;
     detail.append(
       detailItem('MLEID IID', device.mlEidIid),
       detailItem('EUI-64', device.eui64),
       detailItem('Router ID', device.routerId),
-      detailItem('Parent', device.parent),
+      detailItem('OMR IPv6', device.omrIpv6Address || firstIPv6(device.ipv6Addresses)),
       detailItem('Thread version', device.threadVersion),
       detailItem('Link margin', device.linkMargin == null ? null : `${device.linkMargin} dB`),
       detailItem('Retries', linkHealth(device), linkIsStrained(device) ? 'link-strained' : ''),
@@ -959,7 +987,6 @@ function renderDeviceRows() {
       detailItem('IPv6 addresses', (device.ipv6Addresses || []).join('\n')),
       detailItem('First discovered', device.firstSeen ? new Date(device.firstSeen).toLocaleString() : null),
       detailItem('Last updated', device.lastSeen ? new Date(device.lastSeen).toLocaleString() : null),
-      detailItem('Link margin', device.linkMargin == null ? null : `${device.linkMargin} dB`),
       detailItem('Link quality / RSSI', [device.linkQuality == null ? null : `LQI ${device.linkQuality}`, device.rssi == null ? null : `${device.rssi} dBm`].filter(Boolean).join(' · '))
     );
     const listExt = deviceExtendedAddress(device);
@@ -973,6 +1000,8 @@ function renderDeviceRows() {
       const open = row.getAttribute('aria-expanded') === 'true';
       row.setAttribute('aria-expanded', String(!open));
       detail.classList.toggle('open', !open);
+      if (open) state.expandedDevices.delete(expandKey);
+      else state.expandedDevices.add(expandKey);
     });
     nodes.push(row, detail);
   });
@@ -1212,6 +1241,16 @@ async function loadData(manual = false) {
     state.busy = false;
     refreshDot.classList.remove('spinning');
   }
+}
+
+// parentFallback names an unlabelled parent readably: the router id is the top six
+// bits of the RLOC16, so "Router 2 · 0x0800" says the same thing as the bare hex
+// while still carrying the exact identifier for cross-referencing ot-ctl output.
+function parentFallback(router) {
+  if (router.isBorderRouter) return 'Border Router';
+  const routerId = router.routerId ?? routerIdFromRloc(router.rloc16);
+  if (routerId == null) return router.rloc16 || router.id;
+  return router.rloc16 ? `Router ${routerId} · ${router.rloc16}` : `Router ${routerId}`;
 }
 
 function deviceLabel(device, fallback) {
