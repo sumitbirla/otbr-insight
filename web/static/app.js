@@ -362,12 +362,28 @@ function renderNetworkScan(data) {
   } else if (items.some(network => !network.name || !network.extendedPanId)) {
     note.querySelector('p').textContent = 'Some nearby beacons did not advertise a network name or Extended PAN ID. Channel, PAN ID, and hardware address are still shown.';
     note.classList.remove('hidden');
+  } else if (data.passes > 1) {
+    note.querySelector('p').textContent = `Merged from ${data.passes} discovery passes: neighbours answer intermittently, so one pass alone misses about half of them.`;
+    note.classList.remove('hidden');
   } else {
     note.classList.add('hidden');
   }
 
+  // The page knows its own network from the overview, so its card should not
+  // depend on another router in it answering a discovery request — with a single
+  // other router, that answer comes and goes. When the scan did not hear it,
+  // show it anyway and say so.
+  const overview = state.overview || {};
+  const heardOwn = items.some(isCurrentNetwork);
+  const shown = items.slice();
+  if (status === 'available' && !heardOwn && overview.networkName) {
+    shown.unshift({
+      name: overview.networkName, extendedPanId: overview.extendedPanId, panId: overview.panId,
+      channel: overview.rcpChannel != null ? Number(overview.rcpChannel) : null, hardwareAddress: '', unheard: true
+    });
+  }
   const rows = document.getElementById('networkRows');
-  if (!items.length) {
+  if (!shown.length) {
     const empty = document.createElement('div');
     empty.className = 'inventory-empty';
     const icon = document.createElement('span');
@@ -380,8 +396,8 @@ function renderNetworkScan(data) {
     empty.append(icon, title, text);
     rows.replaceChildren(empty);
   } else {
-    rows.replaceChildren(...items.map((network, index) => {
-      const current = isCurrentNetwork(network);
+    rows.replaceChildren(...shown.map((network, index) => {
+      const current = network.unheard || isCurrentNetwork(network);
       const card = document.createElement('article');
       card.className = `network-card ${current ? 'current' : ''}`;
       card.setAttribute('role', 'listitem');
@@ -393,7 +409,7 @@ function renderNetworkScan(data) {
       const name = document.createElement('strong');
       name.textContent = network.name || (current ? state.overview?.networkName : '') || `Unnamed network ${index + 1}`;
       const detail = document.createElement('small');
-      detail.textContent = current ? 'Attached to this OTBR' : 'Heard during this scan';
+      detail.textContent = network.unheard ? 'Your network — no other router in it answered this scan' : current ? 'Attached to this OTBR' : 'Heard during this scan';
       identity.append(name, detail);
       const relationship = document.createElement('span');
       relationship.className = `network-tag ${current ? 'current' : ''}`;
@@ -412,7 +428,7 @@ function renderNetworkScan(data) {
       const list = document.createElement('dl');
       list.append(
         networkDetail('Extended PAN ID', network.extendedPanId),
-        networkDetail('Hardware address', network.hardwareAddress)
+        networkDetail('Hardware address', network.unheard ? 'Not heard in this scan' : network.hardwareAddress)
       );
       more.append(list);
       card.append(header, facts, more);

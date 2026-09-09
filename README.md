@@ -41,7 +41,7 @@ The rest follows from that gap:
 - Per-device link health: signal, link margin, and frame/message retry rates, flagged when a link is straining
 - Diagnostics view of OpenThread's own event history — attachments, departures, role and partition changes — covering time before the dashboard was running
 - Reachability testing from the border router, which can reach mesh-local addresses a browser cannot
-- On-demand scan of nearby Thread networks with the current network highlighted
+- On-demand scan of nearby Thread networks, three discovery passes merged, with your own network always shown first — from the border router's own knowledge, since a scan hears a network only when *another* router in it answers
 - Channel noise measurement: about ten seconds of repeated sweeps over the 16 channels, showing the loudest and typical signal on each, graded against the quietest, with Wi-Fi overlap marked and the current channel assessed
 - Built-in Thread guide and contextual explanations for terms such as RLOC16, partitions, and OMR addressing
 - Dark and light themes, responsive layout for desktop and tablet
@@ -147,7 +147,7 @@ Everything the dashboard shows comes from one of two channels. The REST API work
 | Addresses of routers, which appear in no child table | `srp server host` |
 | The border router's own addresses | `ipaddr`, `ipaddr mleid` |
 | Which address is off-mesh routable | `br omrprefix` |
-| Nearby Thread networks, with names and extended PAN IDs | `discover`, falling back to `scan` |
+| Nearby Thread networks, with names and extended PAN IDs | `discover` (three passes merged — a neighbour answers a single pass only about half the time), falling back to `scan` |
 | Peak signal per channel, for the channel-noise chart | `scan energy`, repeated for about ten seconds (default dwell time only — see below) |
 | Runtime details: OpenThread and RCP versions, API version, channel, transmit power, EUI-64, PAN ID, interface state | `version`, `version api`, `rcp version`, `channel`, `txpower`, `eui64`, `panid`, `state` |
 | Event history: role and partition changes, device attachments and departures | `history netinfo`, `history neighbor` |
@@ -157,7 +157,7 @@ Everything the dashboard shows comes from one of two channels. The REST API work
 
 One hazard is worth knowing. The energy scan is run only with the firmware's default dwell time. A 500 ms per-channel dwell hung the radio co-processor on the reference border router (a Silicon Labs EFR32 on an SMLIGHT SLZB-07): the RCP stopped answering, `otbr-agent` aborted, and only unplugging the dongle brought it back. The default dwell has been exercised repeatedly without incident, and the app offers no way to lengthen it. To see past the snapshot a short listen gives, the app instead repeats the safe sweep for about ten seconds with pauses between passes, and keeps the loudest and the median reading per channel.
 
-Two costs are worth knowing. The `meshdiag` queries are transactions with other routers, so they are cached for 30 seconds; ages and signal come from local tables on every poll and cost no radio time. And the socket serves one command at a time, so the app and an interactive `ot-ctl` session compete for it.
+Two costs are worth knowing. The `meshdiag` queries are transactions with other routers, so they are cached for 30 seconds; ages and signal come from local tables on every poll and cost no radio time. And the daemon serves **one client session at a time**: a new connection displaces the previous one, taking any output still pending with it. The app opens a connection per command and polls every few seconds, so a long command run by hand in `ot-ctl` while the app is up — `discover`, `scan`, `ping`, `meshdiag` — will usually lose its results and its `Done` to the app's next poll. Stop the service, or use the app's own scan, history and ping instead.
 
 ## Running with systemd
 
@@ -198,7 +198,7 @@ The browser talks only to this API; it never contacts OTBR directly. Responses a
 | `GET /api/v1/devices` | Device inventory with user names overlaid as `customName` |
 | `GET /api/v1/topology` | Router adjacency and child attachments from network diagnostics |
 | `GET /api/v1/capabilities` | Which optional OTBR endpoints this build supports |
-| `GET /api/v1/networks` | Performs an on-demand active scan for nearby networks (can take several seconds) |
+| `GET /api/v1/networks` | Performs an on-demand active scan for nearby networks: three discovery passes merged over the socket (about 15 seconds), one otbr-web scan otherwise; `passes` says which |
 | `GET /api/v1/channels` | Repeated energy scans over about ten seconds; `sweeps`, `currentChannel` and `channels[]` of `{channel, maxRssi, typicalRssi}` |
 | `GET /api/v1/network` | Interface state and the credential-masked active dataset, plus backup metadata |
 | `GET /api/v1/network/credentials` | The unmasked network key, PSKc, and dataset TLV |

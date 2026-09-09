@@ -177,12 +177,15 @@ type AvailableNetwork struct {
 }
 
 type NetworkScan struct {
-	Status     string             `json:"status"`
-	Items      []AvailableNetwork `json:"items"`
-	Source     string             `json:"source"`
-	ScannedAt  time.Time          `json:"scannedAt"`
-	DurationMs int64              `json:"durationMs"`
-	Error      string             `json:"error,omitempty"`
+	Status string             `json:"status"`
+	Items  []AvailableNetwork `json:"items"`
+	Source string             `json:"source"`
+	// Passes is how many discovery passes were merged into Items; zero when the
+	// source performs a single scan of its own.
+	Passes     int       `json:"passes,omitempty"`
+	ScannedAt  time.Time `json:"scannedAt"`
+	DurationMs int64     `json:"durationMs"`
+	Error      string    `json:"error,omitempty"`
 }
 
 // PingResult reports a reachability test run from the border router.

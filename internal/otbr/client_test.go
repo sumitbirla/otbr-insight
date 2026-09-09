@@ -870,14 +870,66 @@ type stubScanner struct {
 	available bool
 	items     []model.AvailableNetwork
 	err       error
+	// passes, when set, is answered one pass per call in rotation.
+	passes [][]model.AvailableNetwork
+	calls  *int
 }
 
 func (s stubScanner) Available() bool { return s.available }
 func (s stubScanner) ScanNetworks(context.Context) ([]model.AvailableNetwork, error) {
+	if s.calls != nil {
+		*s.calls++
+	}
+	if len(s.passes) > 0 {
+		n := 0
+		if s.calls != nil {
+			n = *s.calls - 1
+		}
+		return s.passes[n%len(s.passes)], s.err
+	}
 	return s.items, s.err
 }
 
+func singlePass(t *testing.T) {
+	t.Helper()
+	passes, pause := networkScanPasses, networkScanPause
+	networkScanPasses, networkScanPause = 1, 0
+	t.Cleanup(func() { networkScanPasses, networkScanPause = passes, pause })
+}
+
+func TestScanNetworksMergesSeveralDiscoveryPasses(t *testing.T) {
+	passes, pause := networkScanPasses, networkScanPause
+	networkScanPasses, networkScanPause = 3, 0
+	t.Cleanup(func() { networkScanPasses, networkScanPause = passes, pause })
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	client, _ := NewClient(server.URL, server.Client())
+	ch14, ch25 := 14, 25
+	own := model.AvailableNetwork{Name: "OpenThread-a1b2", ExtendedPANID: "1122334455667788", PANID: "0xA1B2", HardwareAddress: "0708090A0B0C0D0E", Channel: &ch25}
+	nest := model.AvailableNetwork{Name: "NEST-PAN-5294", ExtendedPANID: "8899aabbccddeeff", PANID: "0x5294", HardwareAddress: "08090A0B0C0D0E0F", Channel: &ch14}
+	other := model.AvailableNetwork{Name: "MyHome", ExtendedPANID: "0011223344556677", PANID: "0x1234", HardwareAddress: "090A0B0C0D0E0F10", Channel: &ch25}
+	calls := 0
+	// Neighbours answer intermittently: each pass hears a different subset.
+	client.SetNetworkScanner(stubScanner{available: true, calls: &calls, passes: [][]model.AvailableNetwork{
+		{own, nest}, {own}, {other, own},
+	}})
+	scan, err := client.ScanNetworks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 || scan.Passes != 3 {
+		t.Fatalf("passes = %d (calls %d), want 3", scan.Passes, calls)
+	}
+	if len(scan.Items) != 3 {
+		t.Fatalf("items = %+v, want the union of the three passes", scan.Items)
+	}
+	if scan.Items[0].Name != "MyHome" || scan.Items[1].Name != "NEST-PAN-5294" || scan.Items[2].Name != "OpenThread-a1b2" {
+		t.Fatalf("items not deduplicated and sorted by name: %+v", scan.Items)
+	}
+}
+
 func TestScanNetworksPrefersTheDaemonSocketOverOtbrWeb(t *testing.T) {
+	singlePass(t)
 	var legacyCalled bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		legacyCalled = true

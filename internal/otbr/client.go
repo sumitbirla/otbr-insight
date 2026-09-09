@@ -512,12 +512,21 @@ type NetworkScanner interface {
 // endpoint. Call before serving.
 func (c *Client) SetNetworkScanner(scanner NetworkScanner) { c.scanner = scanner }
 
+// A discovery pass sends one request per channel and listens briefly; a
+// neighbour's router answers after a random delay, so a single pass catches
+// roughly half of them and the list changes from press to press. Several passes
+// merged catch almost all of them. Variables so tests can shorten the run.
+var (
+	networkScanPasses = 3
+	networkScanPause  = 500 * time.Millisecond
+)
+
 func (c *Client) ScanNetworks(ctx context.Context) (*model.NetworkScan, error) {
 	started := time.Now()
 	// The daemon socket reports network names and extended PAN IDs that otbr-web's
 	// endpoint omits, so prefer it whenever it is usable.
 	if c.scanner != nil && c.scanner.Available() {
-		items, err := c.scanner.ScanNetworks(ctx)
+		items, passes, err := mergedDiscovery(ctx, networkScanPasses, networkScanPause, c.scanner.ScanNetworks)
 		var unusable interface{ SocketUnavailable() bool }
 		switch {
 		case err == nil:
@@ -536,7 +545,7 @@ func (c *Client) ScanNetworks(ctx context.Context) (*model.NetworkScan, error) {
 		}
 		if items != nil {
 			return &model.NetworkScan{
-				Status: "available", Items: items, Source: "OpenThread daemon scan",
+				Status: "available", Items: items, Source: "OpenThread daemon scan", Passes: passes,
 				ScannedAt: time.Now().UTC(), DurationMs: time.Since(started).Milliseconds(),
 			}, nil
 		}
@@ -1332,4 +1341,51 @@ func (c *Client) getWithAccept(ctx context.Context, endpoint, accept string) ([]
 		return nil, resp.StatusCode, errors.New("OTBR response exceeded size limit")
 	}
 	return body, resp.StatusCode, nil
+}
+
+// mergedDiscovery runs scan up to passes times, pausing between them, and merges
+// the results by network identity, keeping the strongest sighting of each. A
+// failure on the first pass is returned; a later failure ends the run with what
+// was heard so far.
+func mergedDiscovery(ctx context.Context, passes int, pause time.Duration, scan func(context.Context) ([]model.AvailableNetwork, error)) ([]model.AvailableNetwork, int, error) {
+	merged := []model.AvailableNetwork{}
+	index := map[string]int{}
+	done := 0
+	for done < passes {
+		items, err := scan(ctx)
+		if err != nil {
+			if done == 0 {
+				return nil, 0, err
+			}
+			break
+		}
+		done++
+		for _, network := range items {
+			key := strings.ToLower(network.ExtendedPANID + "|" + network.PANID + "|" + network.HardwareAddress + "|" + network.Name)
+			if at, seen := index[key]; seen {
+				// Same beacon heard again: prefer the sighting that carries more detail.
+				if merged[at].Name == "" && network.Name != "" {
+					merged[at] = network
+				}
+				continue
+			}
+			index[key] = len(merged)
+			merged = append(merged, network)
+		}
+		if done >= passes {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return merged, done, nil
+		case <-time.After(pause):
+		}
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		if merged[i].Name != merged[j].Name {
+			return merged[i].Name < merged[j].Name
+		}
+		return merged[i].HardwareAddress < merged[j].HardwareAddress
+	})
+	return merged, done, nil
 }
