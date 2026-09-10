@@ -79,13 +79,16 @@ Read this before exposing the dashboard.
 
 ## Installation
 
-Download the executable for the OTBR host's architecture and install it:
+Prebuilt Linux binaries for `amd64` and `arm64` are attached to each [GitHub release](https://github.com/sumitbirla/otbr-insight/releases). Pick the one for the OTBR host's architecture (`uname -m` reports `x86_64` for amd64 and `aarch64` for arm64), download it, and install it:
 
 ```sh
+curl -fsSLO https://github.com/sumitbirla/otbr-insight/releases/latest/download/otbr-insight-linux-arm64
 sudo install -m 0755 otbr-insight-linux-arm64 /usr/local/bin/otbr-insight
 ```
 
-No Node.js, Python, database, or other runtime is required.
+A `SHA256SUMS` file accompanies each release for verification. No Node.js, Python, database, or other runtime is required; the binary is static with the web assets embedded.
+
+Releases are cut by pushing a `v*` tag; the workflow in [.github/workflows/release.yml](.github/workflows/release.yml) runs the tests, builds both binaries, and publishes them.
 
 ## Running
 
