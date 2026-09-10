@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,34 @@ func TestScanNetworksParsesTheDiscoverTable(t *testing.T) {
 	}
 	if first.Channel == nil || *first.Channel != 25 {
 		t.Errorf("Channel = %v, want 25", first.Channel)
+	}
+}
+
+func TestScanNetworksDiscoversOneChannelAtATime(t *testing.T) {
+	pause := discoveryChannelPause
+	discoveryChannelPause = 0
+	t.Cleanup(func() { discoveryChannelPause = pause })
+	header := "| Network Name     | Extended PAN     | PAN  | MAC Address      | Ch | dBm | LQI |\r\n" +
+		"+------------------+------------------+------+------------------+----+-----+-----+\r\n"
+	replies := map[string]string{}
+	for ch := 11; ch <= 26; ch++ {
+		replies["discover "+strconv.Itoa(ch)] = header + "Done\r\n"
+	}
+	replies["discover 14"] = header + "| NeighborNet      | 8899aabbccddeeff | 3303 | 08090a0b0c0d0e0f | 14 | -72 |  20 |\r\nDone\r\n"
+	replies["discover 25"] = header + "| OpenThread-a1b2  | 1122334455667788 | a1b2 | 0708090a0b0c0d0e | 25 | -45 |  60 |\r\n" +
+		"| OpenThread-a1b2  | 1122334455667788 | a1b2 | 0708090a0b0c0d0e | 25 | -46 |  60 |\r\nDone\r\n"
+	// The whole-band form must not be needed at all.
+	replies["discover"] = "Error 35: InvalidCommand\r\n"
+	client := New(fakeDaemon(t, replies), 2*time.Second)
+	networks, err := client.ScanNetworks(context.Background())
+	if err != nil {
+		t.Fatalf("ScanNetworks() error = %v", err)
+	}
+	if len(networks) != 2 || networks[0].Name != "NeighborNet" || networks[1].Name != "OpenThread-a1b2" {
+		t.Fatalf("networks = %+v, want the two channels' rows merged in channel order, duplicates collapsed", networks)
+	}
+	if networks[0].Channel == nil || *networks[0].Channel != 14 || networks[1].Channel == nil || *networks[1].Channel != 25 {
+		t.Fatalf("channels = %v %v", networks[0].Channel, networks[1].Channel)
 	}
 }
 

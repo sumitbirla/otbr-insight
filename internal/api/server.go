@@ -90,6 +90,9 @@ func Handler(data Snapshotter, names NameStore, control NetworkController, backu
 		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"extendedAddress": ext, "name": ""}})
 	})
 	mux.HandleFunc("GET /api/v1/networks", func(w http.ResponseWriter, r *http.Request) {
+		// Three channel-by-channel discovery passes take about 25 s, on the edge of
+		// the server's write timeout; extend it for this request alone.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(90 * time.Second))
 		scan, err := data.ScanNetworks(r.Context())
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"data": model.NetworkScan{

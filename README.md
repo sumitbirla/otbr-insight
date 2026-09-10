@@ -147,13 +147,15 @@ Everything the dashboard shows comes from one of two channels. The REST API work
 | Addresses of routers, which appear in no child table | `srp server host` |
 | The border router's own addresses | `ipaddr`, `ipaddr mleid` |
 | Which address is off-mesh routable | `br omrprefix` |
-| Nearby Thread networks, with names and extended PAN IDs | `discover` (three passes merged — a neighbour answers a single pass only about half the time), falling back to `scan` |
+| Nearby Thread networks, with names and extended PAN IDs | `discover <channel>` for each channel with a pause at home between them, three passes merged — a neighbour answers a single pass only about half the time; falling back to whole-band `discover`, then `scan` |
 | Peak signal per channel, for the channel-noise chart | `scan energy`, repeated for about ten seconds (default dwell time only — see below) |
 | Runtime details: OpenThread and RCP versions, API version, channel, transmit power, EUI-64, PAN ID, interface state | `version`, `version api`, `rcp version`, `channel`, `txpower`, `eui64`, `panid`, `state` |
 | Event history: role and partition changes, device attachments and departures | `history netinfo`, `history neighbor` |
 | Reachability test | `ping` |
 
 **Neither channel** supplies the last two rows of the runtime group when otbr-web is running instead of the socket — see *Optional runtime details* above.
+
+Scanning takes the radio off the network's channel, and the border router cannot serve its children while it is away. Measured on the reference router: a whole-band `discover` is 4.9 s away without a break, which is long enough for sleepy children to fail several polls, give up on their parent and re-attach — to another router, since the border router is still deaf. After a run of scans every child had migrated to the one other router in the mesh, and the event log showed pairs of children re-attaching in the same second, which is the signature. Discovery is therefore issued one channel at a time (0.3 s each) with a pause on the home channel between channels, and the energy scan's sweeps are 0.1 s each with pauses between them, so no absence outlasts a poll retry.
 
 One hazard is worth knowing. The energy scan is run only with the firmware's default dwell time. A 500 ms per-channel dwell hung the radio co-processor on the reference border router (a Silicon Labs EFR32 on an SMLIGHT SLZB-07): the RCP stopped answering, `otbr-agent` aborted, and only unplugging the dongle brought it back. The default dwell has been exercised repeatedly without incident, and the app offers no way to lengthen it. To see past the snapshot a short listen gives, the app instead repeats the safe sweep for about ten seconds with pauses between passes, and keeps the loudest and the median reading per channel.
 
@@ -198,7 +200,7 @@ The browser talks only to this API; it never contacts OTBR directly. Responses a
 | `GET /api/v1/devices` | Device inventory with user names overlaid as `customName` |
 | `GET /api/v1/topology` | Router adjacency and child attachments from network diagnostics |
 | `GET /api/v1/capabilities` | Which optional OTBR endpoints this build supports |
-| `GET /api/v1/networks` | Performs an on-demand active scan for nearby networks: three discovery passes merged over the socket (about 15 seconds), one otbr-web scan otherwise; `passes` says which |
+| `GET /api/v1/networks` | Performs an on-demand active scan for nearby networks: three channel-by-channel discovery passes merged over the socket (about 25 seconds), one otbr-web scan otherwise; `passes` says which |
 | `GET /api/v1/channels` | Repeated energy scans over about ten seconds; `sweeps`, `currentChannel` and `channels[]` of `{channel, maxRssi, typicalRssi}` |
 | `GET /api/v1/network` | Interface state and the credential-masked active dataset, plus backup metadata |
 | `GET /api/v1/network/credentials` | The unmasked network key, PSKc, and dataset TLV |

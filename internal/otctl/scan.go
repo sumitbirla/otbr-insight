@@ -5,20 +5,48 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/otbr-insight/otbr-insight/internal/model"
 )
 
+// discoveryChannels are the 2.4 GHz channels a discovery covers, in scan order.
+var discoveryChannels = func() []int {
+	channels := make([]int, 0, 16)
+	for ch := 11; ch <= 26; ch++ {
+		channels = append(channels, ch)
+	}
+	return channels
+}()
+
+// discoveryChannelPause is how long the radio is left on its own channel between
+// per-channel discoveries. Measured: a whole-band "discover" keeps the radio away
+// from the network's channel for 4.9 s without a break, which is long enough for a
+// sleepy child to fail several data polls in a row, give up on its parent and
+// re-attach — and, since the border router is still deaf, re-attach to any other
+// router instead. One channel takes 0.3 s, so scanning channel by channel with a
+// pause at home between them keeps every absence shorter than a poll retry.
+var discoveryChannelPause = 150 * time.Millisecond
+
 // ScanNetworks performs an active scan for nearby Thread networks.
 //
-// "discover" is tried first because it reports the network name, extended PAN ID
-// and joinability that "scan" omits — otbr-web used "scan", so this is strictly
-// more than /available_network returned. Firmware without "discover" falls back.
+// "discover" is used because it reports the network name, extended PAN ID and
+// joinability that "scan" omits — otbr-web used "scan", so this is strictly more
+// than /available_network returned. It is issued one channel at a time (see
+// discoveryChannelPause); firmware that rejects the channel argument gets one
+// whole-band "discover", and firmware without "discover" at all falls back to "scan".
 func (c *Client) ScanNetworks(ctx context.Context) ([]model.AvailableNetwork, error) {
+	networks, err := c.discoverPerChannel(ctx)
+	if err == nil {
+		return networks, nil
+	}
+	if errors.Is(err, ErrUnavailable) {
+		return nil, err // no socket to fall back onto
+	}
 	lines, err := c.Execute(ctx, "discover")
 	if err != nil {
 		if errors.Is(err, ErrUnavailable) {
-			return nil, err // no socket to fall back onto
+			return nil, err
 		}
 		fallback, scanErr := c.Execute(ctx, "scan")
 		if scanErr != nil {
@@ -27,6 +55,45 @@ func (c *Client) ScanNetworks(ctx context.Context) ([]model.AvailableNetwork, er
 		lines = fallback
 	}
 	return parseScanTable(lines), nil
+}
+
+// discoverPerChannel runs "discover <channel>" for each channel with a pause on
+// the home channel between them, merging the rows. A failure on the first channel
+// is returned so the caller can fall back; a failure on a later channel is a
+// transient (the daemon serves one session at a time) and that channel is skipped.
+func (c *Client) discoverPerChannel(ctx context.Context) ([]model.AvailableNetwork, error) {
+	networks := []model.AvailableNetwork{}
+	seen := map[string]bool{}
+	for i, channel := range discoveryChannels {
+		lines, err := c.Execute(ctx, "discover "+strconv.Itoa(channel))
+		if err != nil {
+			if i == 0 {
+				return nil, err
+			}
+			continue
+		}
+		for _, network := range parseScanTable(lines) {
+			key := networkKey(network)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			networks = append(networks, network)
+		}
+		if i == len(discoveryChannels)-1 || discoveryChannelPause == 0 {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return networks, nil
+		case <-time.After(discoveryChannelPause):
+		}
+	}
+	return networks, nil
+}
+
+func networkKey(network model.AvailableNetwork) string {
+	return network.Name + "\x00" + network.ExtendedPANID + "\x00" + network.PANID + "\x00" + network.HardwareAddress
 }
 
 // parseScanTable reads the CLI's pipe-delimited table. Both commands share the
@@ -62,7 +129,7 @@ func parseScanTable(lines []string) []model.AvailableNetwork {
 		}
 		// A real discover repeats a network once per responding beacon, so the same
 		// row can appear several times. Collapse exact duplicates.
-		key := network.Name + "\x00" + network.ExtendedPANID + "\x00" + network.PANID + "\x00" + network.HardwareAddress
+		key := networkKey(network)
 		if seen[key] {
 			continue
 		}

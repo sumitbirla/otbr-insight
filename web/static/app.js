@@ -363,7 +363,7 @@ function renderNetworkScan(data) {
     note.querySelector('p').textContent = 'Some nearby beacons did not advertise a network name or Extended PAN ID. Channel, PAN ID, and hardware address are still shown.';
     note.classList.remove('hidden');
   } else if (data.passes > 1) {
-    note.querySelector('p').textContent = `Merged from ${data.passes} discovery passes: neighbours answer intermittently, so one pass alone misses about half of them.`;
+    note.querySelector('p').textContent = `Merged from ${data.passes} discovery passes: neighbours answer intermittently, so one pass alone misses about half of them. The scan visits one channel at a time and returns to your own between them, so your devices keep being served.`;
     note.classList.remove('hidden');
   } else {
     note.classList.add('hidden');
