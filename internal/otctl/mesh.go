@@ -38,7 +38,13 @@ func (c *Client) Mesh(ctx context.Context) (*model.DeviceInventory, *model.Topol
 	// Routers do not appear in any childtable, so their addresses come from the SRP
 	// registry the border router already keeps — hostnames there are extended
 	// addresses. Best-effort: a device that never registered simply has none.
-	registered := c.srpAddresses(ctx)
+	registry := c.srpRegistry(ctx)
+	registered := map[string][]string{}
+	for ext, host := range registry {
+		if len(host.Addresses) > 0 {
+			registered[ext] = host.Addresses
+		}
+	}
 	// Link quality for routers, which no childtable covers.
 	metrics := c.routerMetrics(ctx)
 	// The local router registers nothing with its own SRP server, so its addresses
@@ -84,7 +90,7 @@ func (c *Client) Mesh(ctx context.Context) (*model.DeviceInventory, *model.Topol
 		}
 		device := model.Device{
 			ID: id, Role: role, ExtendedAddress: router.ExtAddress, RLOC16: router.RLOC16,
-			RouterID: &routerID, IsBorderRouter: router.IsBorderRouter,
+			RouterID: &routerID, IsBorderRouter: router.IsBorderRouter, ThreadVersion: router.Version,
 			IPv6Addresses: addresses, OMRIPv6Address: pickOMR(addresses, omrPrefix),
 		}
 		if !router.IsSelf {
@@ -96,6 +102,7 @@ func (c *Client) Mesh(ctx context.Context) (*model.DeviceInventory, *model.Topol
 				device.LastSeen = &seen
 			}
 		}
+		applyRegistration(&device, registry)
 		devices = append(devices, device)
 	}
 
@@ -160,7 +167,9 @@ func (c *Client) Mesh(ctx context.Context) (*model.DeviceInventory, *model.Topol
 			}
 			child.OMRIPv6Address = pickOMR(child.IPv6Addresses, omrPrefix)
 			nodes = append(nodes, child.node())
-			devices = append(devices, child.device())
+			device := child.device()
+			applyRegistration(&device, registry)
+			devices = append(devices, device)
 			links = append(links, model.TopologyLink{
 				Source: parent, Target: child.ID(), Type: "child",
 				LinkQuality: child.LinkQuality, LinkMargin: child.LinkMargin,
@@ -178,44 +187,6 @@ func (c *Client) Mesh(ctx context.Context) (*model.DeviceInventory, *model.Topol
 			Status: "available", CollectionSupported: true, Nodes: nodes, Links: links,
 			Source: "OpenThread mesh diagnostics", RequestLatencyMs: latency,
 		}, nil
-}
-
-// srpAddresses reads the border router's SRP registry, keyed by extended address.
-// A Thread device registering with SRP uses its extended address as the hostname
-// ("0102030405060708.default.service.arpa."), which is exactly how this app keys
-// devices, so the two join directly.
-func (c *Client) srpAddresses(ctx context.Context) map[string][]string {
-	lines, err := c.Execute(ctx, "srp server host")
-	if err != nil {
-		return nil
-	}
-	hosts := map[string][]string{}
-	current := ""
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if name, _, ok := strings.Cut(trimmed, ".default.service.arpa."); ok && !strings.Contains(name, " ") {
-			current = strings.ToLower(name)
-			continue
-		}
-		if current == "" {
-			continue
-		}
-		// A deleted registration is a lease that has not expired yet, not a device.
-		if trimmed == "deleted: true" {
-			delete(hosts, current)
-			current = ""
-			continue
-		}
-		if list, ok := strings.CutPrefix(trimmed, "addresses: ["); ok {
-			for _, candidate := range strings.Split(strings.TrimSuffix(list, "]"), ",") {
-				candidate = strings.TrimSpace(candidate)
-				if _, err := netip.ParseAddr(candidate); err == nil {
-					hosts[current] = append(hosts[current], candidate)
-				}
-			}
-		}
-	}
-	return hosts
 }
 
 // meshStructureTTL bounds how often the over-the-air queries repeat. The shape of
@@ -456,15 +427,30 @@ type meshRouter struct {
 	RouterID       int
 	RLOC16         string
 	ExtAddress     string
+	Version        string // Thread protocol version number ("4" is Thread 1.3)
 	IsSelf         bool
 	IsLeader       bool
 	IsBorderRouter bool
 	Links          map[int]int // peer router ID -> link quality
 }
 
+// applyRegistration attaches what the SRP registry knows about a device: whether
+// it is registered, and which services it advertises. Nothing is attached for a
+// device that never registered, so the field's absence carries that meaning.
+func applyRegistration(device *model.Device, registry map[string]*srpHost) {
+	host := registry[strings.ToLower(device.ExtendedAddress)]
+	if host == nil {
+		return
+	}
+	registration := host.Registration
+	device.Registration = &registration
+	device.Services = append([]model.AdvertisedService(nil), host.Services...)
+}
+
 type meshChild struct {
 	RLOC16           string
 	ExtAddress       string
+	Version          string
 	ParentID         string
 	Timeout          *int
 	LinkQuality      *int
@@ -518,7 +504,7 @@ func (m meshChild) device() model.Device {
 		ID: m.ID(), Role: "child", ExtendedAddress: m.ExtAddress, RLOC16: m.RLOC16,
 		Parent: m.ParentID, LinkQuality: m.LinkQuality, LinkMargin: m.LinkMargin,
 		RSSI: m.AverageRSSI, IPv6Addresses: m.IPv6Addresses, OMRIPv6Address: m.OMRIPv6Address,
-		FirstSeen: first, LastSeen: last,
+		FirstSeen: first, LastSeen: last, ThreadVersion: m.Version,
 		FrameErrorRate: m.FrameErrorRate, MessageErrorRate: m.MessageErrorRate,
 	}
 }
@@ -530,7 +516,16 @@ func (m meshChild) device() model.Device {
 var (
 	routerHeader = regexp.MustCompile(`^id:(\d+)\s+rloc16:(0x[0-9a-fA-F]+)\s+ext-addr:([0-9a-fA-F]+)`)
 	linkSet      = regexp.MustCompile(`^(\d)-links:\{([^}]*)\}`)
+	// Both meshdiag header lines carry "ver:N", the Thread protocol version.
+	versionToken = regexp.MustCompile(`\bver:(\d+)`)
 )
+
+func headerVersion(line string) string {
+	if match := versionToken.FindStringSubmatch(line); match != nil {
+		return match[1]
+	}
+	return ""
+}
 
 func parseMeshTopology(lines []string) []meshRouter {
 	var routers []meshRouter
@@ -540,6 +535,7 @@ func parseMeshTopology(lines []string) []meshRouter {
 			id, _ := strconv.Atoi(match[1])
 			routers = append(routers, meshRouter{
 				RouterID: id, RLOC16: strings.ToLower(match[2]), ExtAddress: strings.ToLower(match[3]),
+				Version: headerVersion(trimmed),
 				// The trailing " - me - leader - br" markers describe this router.
 				IsSelf:         strings.Contains(trimmed, "- me"),
 				IsLeader:       strings.Contains(trimmed, "- leader"),
@@ -574,6 +570,7 @@ func parseMeshChildTable(lines []string) []meshChild {
 		if match := childHeader.FindStringSubmatch(trimmed); match != nil {
 			children = append(children, meshChild{
 				RLOC16: strings.ToLower(match[1]), ExtAddress: strings.ToLower(match[2]),
+				Version: headerVersion(trimmed),
 			})
 			continue
 		}

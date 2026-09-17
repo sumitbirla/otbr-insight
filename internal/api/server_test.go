@@ -297,3 +297,108 @@ func TestControlErrorStatusCodes(t *testing.T) {
 		})
 	}
 }
+
+// fakeFabricSnapshotter adds the optional mDNS browse, which registers the fabrics route.
+type fakeFabricSnapshotter struct {
+	fakeSnapshotter
+	scan *model.FabricScan
+}
+
+func (f *fakeFabricSnapshotter) MatterFabrics(context.Context) (*model.FabricScan, error) {
+	return f.scan, nil
+}
+
+// fakeSignalSnapshotter adds the optional trail, which registers the signal route.
+type fakeSignalSnapshotter struct {
+	fakeSnapshotter
+	history model.SignalHistory
+}
+
+func (f *fakeSignalSnapshotter) SignalHistory(ext string) model.SignalHistory {
+	f.history.ExtendedAddress = ext
+	return f.history
+}
+
+func TestSignalRouteNeedsATrail(t *testing.T) {
+	names := &fakeNames{names: map[string]string{}}
+	plain := Handler(&fakeSnapshotter{}, names, &fakeController{}, &fakeBackups{}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rec := httptest.NewRecorder()
+	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/devices/0102030405060708/signal", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("without a trail: status %d, want 404", rec.Code)
+	}
+
+	rssi := -64
+	withTrail := Handler(&fakeSignalSnapshotter{history: model.SignalHistory{
+		BucketSeconds: 60, WindowSeconds: 7200, CoveredSecs: 120, MeanRSSI: &rssi,
+		Samples: []model.SignalSample{{At: time.Now().UTC(), Present: true, Samples: 12, RSSI: &rssi}},
+	}}, names, &fakeController{}, &fakeBackups{}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rec = httptest.NewRecorder()
+	withTrail.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/devices/0102030405060708/signal", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data model.SignalHistory `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.ExtendedAddress != "0102030405060708" || len(body.Data.Samples) != 1 || *body.Data.MeanRSSI != -64 {
+		t.Fatalf("history = %+v", body.Data)
+	}
+}
+
+func TestFabricsRouteNeedsABrowserAndOverlaysNames(t *testing.T) {
+	names := &fakeNames{names: map[string]string{"0102030405060708": "Hallway sensor", "fabric:1122334455667788": "Home Assistant"}}
+	plain := Handler(&fakeSnapshotter{}, names, &fakeController{}, &fakeBackups{}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rec := httptest.NewRecorder()
+	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/fabrics", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("without a browser: status %d, want 404", rec.Code)
+	}
+
+	withScan := Handler(&fakeFabricSnapshotter{scan: &model.FabricScan{Status: "available", Fabrics: []model.MatterFabric{{
+		ID: "1122334455667788", NodeCount: 2, MeshCount: 1, Nodes: []model.MatterNode{
+			{NodeID: "0x14", ExtendedAddress: "0102030405060708", OnMesh: true},
+			{NodeID: "0x3", Host: "0c4ea0aabbcc.local."},
+		}}}}}, names, &fakeController{}, &fakeBackups{}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rec = httptest.NewRecorder()
+	withScan.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/fabrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data model.FabricScan `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	nodes := body.Data.Fabrics[0].Nodes
+	if nodes[0].CustomName != "Hallway sensor" || nodes[1].CustomName != "" {
+		t.Fatalf("names overlaid wrongly: %+v", nodes)
+	}
+	if body.Data.Fabrics[0].CustomName != "Home Assistant" {
+		t.Fatalf("fabric label not overlaid: %+v", body.Data.Fabrics[0])
+	}
+
+	// Naming a fabric goes through the same store under its own prefix.
+	rec = httptest.NewRecorder()
+	put := httptest.NewRequest(http.MethodPut, "/api/v1/fabrics/8899AABBCCDDEEFF/name", strings.NewReader(`{"name":"Apple Home"}`))
+	put.Header.Set("Content-Type", "application/json")
+	withScan.ServeHTTP(rec, put)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT fabric name: %d %s", rec.Code, rec.Body.String())
+	}
+	if names.names["fabric:8899aabbccddeeff"] != "Apple Home" {
+		t.Fatalf("store after PUT: %v", names.names)
+	}
+	rec = httptest.NewRecorder()
+	withScan.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/fabrics/8899AABBCCDDEEFF/name", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE fabric name: %d", rec.Code)
+	}
+	if _, ok := names.names["fabric:8899aabbccddeeff"]; ok {
+		t.Fatalf("store after DELETE: %v", names.names)
+	}
+}

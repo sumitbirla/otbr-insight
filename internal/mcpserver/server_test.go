@@ -27,6 +27,17 @@ type fakeData struct {
 	topology  model.Topology
 	scanErr   error
 	energy    *model.EnergyScan
+	fabrics   *model.FabricScan
+	signal    model.SignalHistory
+}
+
+func (f *fakeData) SignalHistory(string) model.SignalHistory { return f.signal }
+
+func (f *fakeData) MatterFabrics(context.Context) (*model.FabricScan, error) {
+	if f.fabrics == nil {
+		return nil, errors.New("no multicast")
+	}
+	return f.fabrics, nil
 }
 
 func (f *fakeData) EnergyScan(context.Context) (*model.EnergyScan, error) {
@@ -85,7 +96,9 @@ func fixture(now time.Time) *fakeData {
 			{ID: "1112131415161718", ExtendedAddress: "1112131415161718", Role: "router", RLOC16: "0x0400", RouterID: intPtr(1), LastSeen: &recent, RSSI: intPtr(-60),
 				IPv6Addresses: []string{"fd11:2233:4455:0:aaaa:bbbb:cccc:dddd", "fdde:ad00:beef:0:aaaa:bbbb:cccc:dddd"}},
 			{ID: "2122232425262728", ExtendedAddress: "2122232425262728", Role: "child", RLOC16: "0x0401", Parent: "1112131415161718", LastSeen: &recent, RSSI: intPtr(-70),
-				IPv6Addresses: []string{"fdde:ad00:beef:0:1:2:3:4", "fd11:2233:4455:0:1:2:3:4"}, OMRIPv6Address: "fd11:2233:4455:0:1:2:3:4"},
+				IPv6Addresses: []string{"fdde:ad00:beef:0:1:2:3:4", "fd11:2233:4455:0:1:2:3:4"}, OMRIPv6Address: "fd11:2233:4455:0:1:2:3:4",
+				Registration: &model.ServiceRegistration{RemainingSeconds: intPtr(5400)},
+				Services:     []model.AdvertisedService{{Instance: "1122334455667788-0000000000000014", Type: "_matter._tcp", Port: intPtr(5540), FabricID: "1122334455667788", NodeID: "0x14"}}},
 			{ID: "3132333435363738", ExtendedAddress: "3132333435363738", Role: "child", RLOC16: "0x7001", LastSeen: &old, RSSI: intPtr(-88)},
 		}},
 		topology: model.Topology{Status: "available", Source: "otctl", Nodes: []model.TopologyNode{
@@ -146,11 +159,11 @@ func TestToolsRegisteredByCapability(t *testing.T) {
 		return out
 	}
 	full := names(connect(t, fixture(time.Now()), fakeLabels{}, &fakeProvider{}))
-	if got := strings.Join(full, ","); got != "get_history,get_network,get_topology,list_devices,ping_device,scan_channels,scan_networks" {
+	if got := strings.Join(full, ","); got != "get_history,get_network,get_signal_history,get_topology,list_devices,list_fabrics,ping_device,scan_channels,scan_networks" {
 		t.Fatalf("tools with socket provider: %s", got)
 	}
 	restOnly := names(connect(t, fixture(time.Now()), fakeLabels{}, struct{}{}))
-	if got := strings.Join(restOnly, ","); got != "get_network,get_topology,list_devices,scan_channels,scan_networks" {
+	if got := strings.Join(restOnly, ","); got != "get_network,get_signal_history,get_topology,list_devices,list_fabrics,scan_channels,scan_networks" {
 		t.Fatalf("tools without socket provider: %s", got)
 	}
 }
@@ -221,6 +234,15 @@ func TestListDevicesNamesParentsAndAges(t *testing.T) {
 	}
 	if byName["Border Router"].MeshLocalAddress != "fdde:ad00:beef:0:1111:2222:3333:4444" {
 		t.Fatalf("border router mesh-local from overview: %+v", byName["Border Router"])
+	}
+	if kitchen.Registration == nil || kitchen.Registration.Status != "registered" || *kitchen.Registration.RemainingSeconds != 5400 {
+		t.Fatalf("registration = %+v, want registered with 5400s left", kitchen.Registration)
+	}
+	if len(kitchen.Services) != 1 || kitchen.Services[0].NodeID != "0x14" {
+		t.Fatalf("services = %+v, want the Matter node", kitchen.Services)
+	}
+	if byName["Border Router"].Registration != nil {
+		t.Fatalf("a device that never registered must carry no registration: %+v", byName["Border Router"])
 	}
 }
 
@@ -324,6 +346,90 @@ func TestHistoryFiltersAndNames(t *testing.T) {
 	provider.history = nil
 	if result := call(t, session, "get_history", nil, nil); !result.IsError {
 		t.Fatal("history failure should surface as a tool error")
+	}
+}
+
+func TestListFabricsNamesMeshNodes(t *testing.T) {
+	data := connectFixture(t)
+	data.fabrics = &model.FabricScan{Status: "available", Source: "test", NodeCount: 2, Fabrics: []model.MatterFabric{{
+		ID: "1122334455667788", NodeCount: 2, MeshCount: 1, Nodes: []model.MatterNode{
+			{NodeID: "0x14", ExtendedAddress: "2122232425262728", OnMesh: true},
+			{NodeID: "0x3", Host: "0c4ea0aabbcc.local."},
+		}}}}
+	session := connect(t, data, fakeLabels{"2122232425262728": "Kitchen sensor", "fabric:1122334455667788": "Home Assistant"}, struct{}{})
+	var out fabricList
+	call(t, session, "list_fabrics", nil, &out)
+	if len(out.Fabrics) != 1 || out.Fabrics[0].ID != "1122334455667788" || out.Fabrics[0].Name != "Home Assistant" {
+		t.Fatalf("fabrics = %+v", out.Fabrics)
+	}
+	nodes := out.Fabrics[0].Nodes
+	if nodes[0].Name != "Kitchen sensor" || !nodes[0].OnMesh {
+		t.Fatalf("mesh node = %+v, want the user's label", nodes[0])
+	}
+	if nodes[1].Name != "" || nodes[1].Host != "0c4ea0aabbcc.local." {
+		t.Fatalf("LAN node = %+v", nodes[1])
+	}
+}
+
+func TestGetSignalHistoryReducesTheTrailAndKeepsTheDip(t *testing.T) {
+	data := connectFixture(t)
+	base := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+	samples := []model.SignalSample{}
+	for i := 0; i < 48; i++ {
+		rssi, low, high := -60, -62, -58
+		// One minute of the window is a deep dip; the reduction must not average it away.
+		if i == 20 {
+			rssi, low, high = -88, -92, -84
+		}
+		samples = append(samples, model.SignalSample{
+			At: base.Add(time.Duration(i) * time.Minute), Present: true, Samples: 12,
+			RSSI: &rssi, MinRSSI: &low, MaxRSSI: &high,
+		})
+	}
+	// Four minutes where the device was not in the inventory at all.
+	for i := 48; i < 52; i++ {
+		samples = append(samples, model.SignalSample{At: base.Add(time.Duration(i) * time.Minute)})
+	}
+	mean, low, high, pct := -61, -92, -58, 92
+	data.signal = model.SignalHistory{
+		ExtendedAddress: "2122232425262728", BucketSeconds: 60, WindowSeconds: 7200, Samples: samples,
+		MeanRSSI: &mean, MinRSSI: &low, MaxRSSI: &high, PresentPct: &pct, CoveredSecs: 52 * 60,
+	}
+	session := connect(t, data, fakeLabels{"2122232425262728": "Kitchen sensor"}, struct{}{})
+	var out signalView
+	call(t, session, "get_signal_history", map[string]any{"device": "Kitchen sensor"}, &out)
+
+	if out.Name != "Kitchen sensor" || out.CoveredSeconds != 3120 {
+		t.Fatalf("identity/coverage = %+v", out)
+	}
+	if len(out.Series) > 24 || len(out.Series) == 0 {
+		t.Fatalf("series = %d points, want at most 24", len(out.Series))
+	}
+	if out.StepSeconds != 180 {
+		t.Errorf("stepSeconds = %d, want 52 buckets folded into 24 groups of 3 minutes", out.StepSeconds)
+	}
+	worst := 0
+	for _, point := range out.Series {
+		if point.MinRSSI != nil && *point.MinRSSI < worst {
+			worst = *point.MinRSSI
+		}
+	}
+	if worst != -92 {
+		t.Errorf("worst reading in the series = %d, want the dip at -92 preserved", worst)
+	}
+	// The absent tail must still read as absent after reduction.
+	if last := out.Series[len(out.Series)-1]; last.PresentP != 0 {
+		t.Errorf("trailing gap = %d%% present, want 0", last.PresentP)
+	}
+}
+
+func TestGetSignalHistoryReportsAnEmptyTrailPlainly(t *testing.T) {
+	data := connectFixture(t)
+	session := connect(t, data, fakeLabels{}, struct{}{})
+	var out signalView
+	call(t, session, "get_signal_history", map[string]any{"device": "1112131415161718"}, &out)
+	if len(out.Series) != 0 || out.Note == "" {
+		t.Fatalf("empty trail = %+v, want no series and an explanation", out)
 	}
 }
 

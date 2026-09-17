@@ -19,12 +19,13 @@
       <nav class="main-nav" aria-label="Primary navigation">
         <p>CURRENT NETWORK</p>
         <a class="active" href="#home" data-nav="home" aria-current="page"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></span><span class="nav-label">Devices &amp; mesh</span></a>
-        <p>DISCOVER</p>
-        <a href="#network" data-nav="network"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span><span class="nav-label">Nearby Networks</span></a>
         <p>MANAGE</p>
         <a href="#manage" data-nav="manage"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span><span class="nav-label">Network Setup</span></a>
         <p>TOOLS</p>
-        <a href="#diagnostics" data-nav="diagnostics"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span class="nav-label">Diagnostics</span></a>
+        <a href="#network" data-nav="network"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span><span class="nav-label">Nearby networks</span></a>
+        <a href="#channels" data-nav="channels"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M6 16V9"/><path d="M11 16V4"/><path d="M16 16v-6"/><path d="M21 16v-3"/></svg></span><span class="nav-label">Channel noise</span></a>
+        <a href="#fabrics" data-nav="fabrics"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg></span><span class="nav-label">Matter fabrics</span></a>
+        <a href="#events" data-nav="events"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span class="nav-label">Event log</span></a>
         <a href="#help" data-nav="help"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span><span class="nav-label">Help</span></a>
       </nav>
 
@@ -159,7 +160,8 @@
 
         <section class="network-section view hidden" id="networkView" data-view="network" aria-hidden="true">
           <div class="view-intro network-view-intro">
-            <div class="network-intro-actions">
+            <p>Thread networks within radio range of this border router, including your own.</p>
+            <div class="network-intro-actions scan-actions">
               <span class="inventory-badge neutral" id="networkScanStatus">NOT SCANNED</span>
               <button class="scan-button" id="scanNetworksButton" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span>Scan now</button>
             </div>
@@ -173,12 +175,15 @@
               <div class="inventory-empty"><span class="network-scan-symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span><strong>No scan performed</strong><p>Select “Scan now” to look for Thread networks in radio range.</p></div>
             </div>
           </section>
+        </section>
 
-          <section class="section-head channel-head"><div><h2 data-term="channel-noise">Channel noise</h2></div>
-            <div class="network-intro-actions channel-actions">
+        <section class="network-section view hidden" id="channelsView" data-view="channels" aria-hidden="true">
+          <div class="view-intro network-view-intro">
+            <p data-term="channel-noise">How busy each of the 16 channels sounds from this border router.</p>
+            <div class="network-intro-actions scan-actions">
               <button class="scan-button" id="scanChannelsButton" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M6 16V9"/><path d="M11 16V4"/><path d="M16 16v-6"/><path d="M21 16v-3"/></svg></span>Measure</button>
             </div>
-          </section>
+          </div>
           <section class="inventory-panel card channel-panel">
             <div class="inventory-note neutral hidden" id="channelScanNote" role="status"><span>i</span><p></p></div>
             <div class="channel-chart" id="channelChart" aria-live="polite" aria-label="Peak signal heard per channel">
@@ -187,8 +192,22 @@
           </section>
         </section>
 
+        <section class="network-section view hidden" id="fabricsView" data-view="fabrics" aria-hidden="true">
+          <div class="view-intro network-view-intro">
+            <p data-term="matter-fabrics">Matter controllers with nodes on this LAN, and which of your devices each one has.</p>
+            <div class="network-intro-actions scan-actions">
+              <button class="scan-button" id="browseFabricsButton" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg></span>Browse</button>
+            </div>
+          </div>
+          <section class="inventory-panel card channel-panel">
+            <div class="inventory-note neutral hidden" id="fabricNote" role="status"><span>i</span><p></p></div>
+            <div class="network-card-grid" id="fabricRows" role="list" aria-label="Matter fabrics on the LAN" aria-live="polite">
+              <div class="inventory-empty"><strong>Not browsed yet</strong><p>Select “Browse” to ask the LAN which Matter fabrics have nodes on it, and which of your Thread devices belong to each.</p></div>
+            </div>
+          </section>
+        </section>
 
-        <section class="diagnostics-section view hidden" id="diagnosticsView" data-view="diagnostics" aria-hidden="true">
+        <section class="events-section view hidden" id="eventsView" data-view="events" aria-hidden="true">
           <div class="view-intro">
             <p>Events recorded by OpenThread itself, not observed by this dashboard — so they cover time before it was running.</p>
             <button class="scan-button" id="refreshHistoryButton" type="button">Reload</button>
@@ -379,7 +398,7 @@
   </aside>
   <aside class="rename-popover hidden" id="renamePopover" role="dialog" aria-modal="false" aria-labelledby="renameTitle">
     <button class="term-close" id="renameClose" type="button" aria-label="Close rename">×</button>
-    <span class="eyebrow">DEVICE NAME</span>
+    <span class="eyebrow" id="renameEyebrow">DEVICE NAME</span>
     <h2 id="renameTitle">Rename device</h2>
     <p id="renameTarget" class="rename-target"></p>
     <form id="renameForm">

@@ -2,7 +2,7 @@
 // depend on it, and they must not drift from the CSS min-height.
 const TOPOLOGY_NODE_HEIGHT = 96;
 
-const state = { overview: null, devices: null, topology: null, networkScan: null, channelScan: null, deviceMode: 'map', deviceQuery: '', roleFilter: 'all', topologySelectedId: '', expandedDevices: new Set(), busy: false, networkScanBusy: false, renamingExt: null, network: null };
+const state = { overview: null, devices: null, topology: null, networkScan: null, channelScan: null, deviceMode: 'map', deviceQuery: '', roleFilter: 'all', topologySelectedId: '', expandedDevices: new Set(), busy: false, networkScanBusy: false, renamingExt: null, renamingKind: 'device', network: null, fabricScan: null, signalTrails: {}, signalCapable: true };
 const fields = [...document.querySelectorAll('[data-field]')];
 const statusDots = [...document.querySelectorAll('[data-status-dot]')];
 const statusLabels = [...document.querySelectorAll('[data-status-label]')];
@@ -134,6 +134,11 @@ const glossary = {
     description: 'The device’s current job in the Thread mesh: leader, router, router-eligible end device, or child such as a minimal or sleepy end device.',
     why: 'Roles affect forwarding, power use, and attachment behavior, and may change without changing the physical device.'
   },
+  'matter-fabrics': {
+    title: 'Matter fabrics',
+    description: 'A fabric is one Matter controller\'s trust domain — Home Assistant, Apple Home or Google Home each form their own — spanning every device it has commissioned over Thread, Wi-Fi or Ethernet. Nodes advertise themselves on the LAN over mDNS named by fabric and node ID, and the border router advertises on behalf of Thread devices.',
+    why: 'It shows which controllers know each of your Thread devices, and confirms a newly paired device is visible to the LAN at all. Fabric IDs are hashes: tell controllers apart by their node numbering (Home Assistant counts up from 1) or by matching a node ID in the controller\'s own device page.'
+  },
   'link-metrics': {
     title: 'Link metrics',
     description: 'Radio measurements such as RSSI in dBm, Link Quality Indicator (LQI), or link margin. Higher link margin and LQI generally indicate a more reliable connection; RSSI values closer to zero are stronger.',
@@ -252,7 +257,7 @@ function renderOverview(data) {
   }
 
   const title = document.getElementById('pageTitle');
-  if (!['#network', '#help', '#manage', '#diagnostics'].includes(window.location.hash)) title.textContent = homeTitle();
+  if (activeView() === 'home') title.textContent = homeTitle();
 
   updateRefreshLabel();
 }
@@ -587,6 +592,147 @@ async function scanChannels() {
   }
 }
 
+async function browseFabrics() {
+  if (state.fabricBrowseBusy) return;
+  state.fabricBrowseBusy = true;
+  const button = document.getElementById('browseFabricsButton');
+  button.disabled = true;
+  button.classList.add('scanning');
+  button.lastChild.textContent = ' Browsing…';
+  try {
+    const response = await fetch('/api/v1/fabrics', { cache: 'no-store' });
+    const payload = await response.json();
+    renderFabrics(payload.data);
+  } catch (error) {
+    renderFabrics({ status: 'unavailable', fabrics: [], source: 'mDNS browse', error: 'The browse request could not reach the server.' });
+  } finally {
+    state.fabricBrowseBusy = false;
+    button.disabled = false;
+    button.classList.remove('scanning');
+    button.lastChild.textContent = ' Browse';
+  }
+}
+
+function fabricNodeLabel(node) {
+  if (node.customName) return node.customName;
+  if (node.onMesh) return node.extendedAddress;
+  return node.host ? node.host.replace(/\.local\.$/, '') : node.addresses?.[0] || 'Unknown host';
+}
+
+function renderFabrics(data) {
+  state.fabricScan = data;
+  const fabrics = data.fabrics || [];
+  const status = data.status || 'unavailable';
+  const note = document.getElementById('fabricNote');
+  note.classList.remove('scan-error');
+  if (status !== 'available') {
+    note.classList.add('scan-error');
+    note.querySelector('p').textContent = data.error || 'The LAN could not be browsed.';
+    note.classList.remove('hidden');
+  } else if (fabrics.length) {
+    // A device paired with two controllers is two nodes, so the mesh figure counts
+    // distinct devices rather than summing the per-fabric counts.
+    const meshDevices = new Set();
+    for (const fabric of fabrics) {
+      for (const node of fabric.nodes || []) {
+        if (node.onMesh && node.extendedAddress) meshDevices.add(node.extendedAddress);
+      }
+    }
+    note.querySelector('p').textContent = `${data.nodeCount} Matter node${data.nodeCount === 1 ? '' : 's'} answered on the LAN across ${fabrics.length} fabric${fabrics.length === 1 ? '' : 's'}, covering ${meshDevices.size} device${meshDevices.size === 1 ? '' : 's'} on this Thread mesh. A device appears once per controller it is paired with. Nodes that did not answer within a few seconds are not listed; browse again if one is missing.`;
+    note.classList.remove('hidden');
+  } else {
+    note.classList.add('hidden');
+  }
+  const rows = document.getElementById('fabricRows');
+  if (!fabrics.length) {
+    const empty = document.createElement('div');
+    empty.className = 'inventory-empty';
+    const title = document.createElement('strong');
+    title.textContent = status === 'available' ? 'No Matter nodes answered' : 'Browse unavailable';
+    const text = document.createElement('p');
+    text.textContent = status === 'available' ? 'No Matter node advertised itself on the LAN this server is on. Devices are only advertised once commissioned.' : 'The server could not send or receive multicast DNS on its network.';
+    empty.append(title, text);
+    rows.replaceChildren(empty);
+    return;
+  }
+  // Every fabric a Thread device is paired with contains that device, so a tag
+  // saying so marks them all alike and reads as if the fabric were the mesh.
+  // What actually differs between controllers is *which* of your devices each
+  // one has, so the tag carries coverage and the line beneath names what is
+  // missing.
+  const commissioned = new Map();
+  for (const fabric of fabrics) {
+    for (const node of fabric.nodes || []) {
+      if (node.onMesh && node.extendedAddress) commissioned.set(node.extendedAddress, node.customName || node.extendedAddress);
+    }
+  }
+  const meshTotal = commissioned.size;
+
+  rows.replaceChildren(...fabrics.map((fabric) => {
+    const relevant = fabric.meshCount > 0;
+    const complete = relevant && meshTotal > 0 && fabric.meshCount === meshTotal;
+    const present = new Set((fabric.nodes || []).filter((node) => node.onMesh).map((node) => node.extendedAddress));
+    const missing = [...commissioned.entries()].filter(([ext]) => !present.has(ext)).map(([, label]) => label);
+    const card = document.createElement('article');
+    card.className = `network-card ${relevant ? 'current' : ''}`;
+    card.setAttribute('role', 'listitem');
+    const header = document.createElement('div');
+    header.className = 'network-card-header';
+    const icon = document.createElement('i');
+    icon.textContent = relevant ? '●' : '○';
+    const identity = document.createElement('span');
+    const name = document.createElement('strong');
+    name.textContent = fabric.customName || `Fabric ${shortFabric(fabric.id)}`;
+    name.title = fabric.id;
+    const detail = document.createElement('small');
+    detail.textContent = !relevant
+      ? 'No device on this Thread mesh is paired with it'
+      : complete
+        ? `Paired with every Matter device on this mesh (${meshTotal})`
+        : `Missing ${missing.join(', ')}`;
+    detail.title = detail.textContent;
+    identity.append(name, detail);
+    const tag = document.createElement('span');
+    tag.className = `network-tag ${complete ? 'current' : ''}`;
+    tag.textContent = !relevant ? 'LAN ONLY' : complete ? 'ALL DEVICES' : `${fabric.meshCount} OF ${meshTotal}`;
+    header.append(icon, identity, tag);
+    const actions = document.createElement('div');
+    actions.className = 'fabric-card-actions';
+    actions.append(renameButton(fabric.id, fabric.customName, fabric.customName || `Fabric ${shortFabric(fabric.id)}`, 'fabric'));
+
+    const facts = document.createElement('div');
+    facts.className = 'network-card-facts';
+    facts.append(networkFact('Nodes total', fabric.nodeCount), networkFact('On this mesh', `${fabric.meshCount} of ${fabric.nodeCount}`));
+
+    const more = document.createElement('div');
+    more.className = 'network-card-details';
+    const list = document.createElement('dl');
+    list.append(networkDetail('Compressed fabric ID', fabric.id));
+    const nodes = document.createElement('ul');
+    nodes.className = 'fabric-nodes';
+    for (const node of fabric.nodes || []) {
+      const item = document.createElement('li');
+      if (node.onMesh) item.classList.add('on-mesh');
+      const id = document.createElement('code');
+      id.textContent = `Node ${node.nodeId}`;
+      const label = document.createElement('span');
+      label.textContent = fabricNodeLabel(node);
+      label.title = [node.host, ...(node.addresses || [])].filter(Boolean).join('\n');
+      item.append(id, label);
+      if (node.onMesh) {
+        const badge = document.createElement('em');
+        badge.textContent = 'THREAD';
+        item.append(badge);
+      }
+      nodes.append(item);
+    }
+    more.append(list, nodes, actions);
+    card.append(header, facts, more);
+    return card;
+  }));
+  updateRefreshLabel();
+}
+
 async function scanNetworks() {
   if (state.networkScanBusy) return;
   state.networkScanBusy = true;
@@ -684,15 +830,14 @@ function topologyParent(device, routers) {
 // topologyGrid lays `count` nodes out in centred rows of at most `columns`. Wrapping
 // is what keeps the stage inside the viewport: a single unwrapped row of 36 children
 // made the stage 6380px wide, leaving under a fifth of the map on screen.
-function topologyGrid(count, columns, width, top, rowPitch) {
+function topologyGrid(count, columns, width, top, rowPitch, columnPitch = 180, margin = 24) {
   const nodeWidth = 154;
-  const columnPitch = 180;
   return Array.from({ length: count }, (_, index) => {
     const row = Math.floor(index / columns);
     const column = index % columns;
     const inThisRow = Math.min(columns, count - row * columns);
     const rowWidth = inThisRow * columnPitch;
-    const start = Math.max(24, Math.round((width - rowWidth) / 2 + (columnPitch - nodeWidth) / 2));
+    const start = Math.max(margin, Math.round((width - rowWidth) / 2 + (columnPitch - nodeWidth) / 2));
     return { x: start + column * columnPitch, y: top + row * rowPitch };
   });
 }
@@ -747,6 +892,7 @@ function topologyNode(device, position, attachment = null) {
   const badges = document.createElement('span');
   if (leader) badges.append(topologyBadge('LEADER', 'leader'));
   if (device.isBorderRouter) badges.append(topologyBadge('LOCAL', 'local'));
+  if (pairingService(device)) badges.append(pairingBadge());
   top.append(icon, badges);
 
   const label = deviceLabel(device, device.isBorderRouter ? 'Border Router' : device.id || 'Thread device');
@@ -846,10 +992,261 @@ function renderTopologyInspector(device, attachment = null) {
     topologyInspectorItem('Link margin', device.linkMargin == null ? null : `${device.linkMargin} dB`),
     topologyInspectorItem('Retries', linkHealth(device) || null, linkIsStrained(device) ? 'link-strained' : ''),
     topologyInspectorItem('Child timeout', device.timeout == null ? null : `${device.timeout}s`),
-    topologyInspectorItem('Receiver', device.rxOnWhenIdle == null ? null : device.rxOnWhenIdle ? 'Always on' : 'Sleepy')
+    topologyInspectorItem('Receiver', device.rxOnWhenIdle == null ? null : device.rxOnWhenIdle ? 'Always on' : 'Sleepy'),
+    topologyInspectorItem('Thread version', threadVersionText(device.threadVersion)),
+    ...registrationItems(device),
+    ...signalBlock(device, 'popover')
   );
   document.getElementById('devicePopoverTitle').textContent = deviceLabel(device, device.id);
   body.append(heading, list);
+}
+
+// A Matter device advertises _matterc._udp only while a commissioning window is
+// open, and withdraws it once paired, so a live one means "pairing right now".
+// Note this can only ever show a window opened by a device already on the mesh
+// (adding a second controller): initial commissioning happens over Bluetooth,
+// before the device has joined Thread or registered anything with SRP.
+function pairingService(device) {
+  if (!device?.registration?.commissionable) return null;
+  return (device.services || []).find((service) => service.type === '_matterc._udp') || {};
+}
+
+function pairingBadge(className = '') {
+  const badge = document.createElement('em');
+  badge.className = `pairing-badge ${className}`.trim();
+  badge.textContent = 'PAIRING';
+  badge.title = 'A commissioning window is open on this device right now';
+  return badge;
+}
+
+// --- signal history --------------------------------------------------------
+// The server keeps a minute-by-minute trail of each device's link in memory. It
+// is fetched per device rather than folded into the poll: the trail is only worth
+// bytes when somebody is actually looking at that device.
+const SIGNAL_FLOOR = -100;
+const SIGNAL_CEIL = -40;
+const SIGNAL_TTL = 45000;
+
+function signalTrail(ext) {
+  const key = String(ext || '').toLowerCase();
+  if (!key) return null;
+  const entry = state.signalTrails[key];
+  if (entry && (entry.pending || Date.now() - entry.fetchedAt < SIGNAL_TTL)) return entry.data;
+  state.signalTrails[key] = { data: entry?.data || null, fetchedAt: Date.now(), pending: true };
+  fetch(`/api/v1/devices/${encodeURIComponent(key)}/signal`, { cache: 'no-store' })
+    .then(response => {
+      // A server whose data source keeps no trail does not register the route at
+      // all, so one 404 retires the whole section rather than leaving every
+      // device saying "no trail yet" forever.
+      if (response.status === 404) {
+        state.signalCapable = false;
+        return null;
+      }
+      return response.ok ? response.json() : Promise.reject(new Error('unavailable'));
+    })
+    .then(payload => {
+      state.signalTrails[key] = { data: payload?.data || null, fetchedAt: Date.now(), pending: false };
+      redrawDeviceSurfaces();
+    })
+    .catch(() => {
+      state.signalTrails[key] = { data: null, fetchedAt: Date.now(), pending: false };
+    });
+  return entry?.data || null;
+}
+
+// A trail arriving after its device was drawn has to reach whichever surface is
+// showing it, and only one of the two ever is. The map's render cache has to be
+// invalidated first: the popover is drawn as the last step of renderTopology, so
+// an unchanged signature would skip it and the chart would not appear until some
+// other field moved.
+function redrawDeviceSurfaces() {
+  if (state.deviceMode === 'map') {
+    renderTopology.signature = null;
+    renderTopology();
+  } else {
+    renderDeviceRows();
+  }
+}
+
+function signalChart(history) {
+  const samples = history?.samples || [];
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 240 46');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('class', 'signal-chart');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', signalCaption(history) || 'Signal history');
+  const add = (tag, attrs) => {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+    svg.append(node);
+    return node;
+  };
+  // A fixed scale, so two devices can be compared and a trail does not appear to
+  // improve just because its own worst reading moved.
+  const y = (rssi) => 46 - ((Math.max(SIGNAL_FLOOR, Math.min(SIGNAL_CEIL, rssi)) - SIGNAL_FLOOR) / (SIGNAL_CEIL - SIGNAL_FLOOR)) * 46;
+  const x = (index) => samples.length < 2 ? 120 : (index / (samples.length - 1)) * 240;
+
+  for (const level of [-60, -80]) add('line', { x1: 0, x2: 240, y1: y(level), y2: y(level), class: 'signal-grid' });
+
+  // Absence is drawn, not skipped: a gap is the difference between a quiet link
+  // and a device that was not there at all.
+  let runStart = null;
+  samples.forEach((sample, index) => {
+    if (!sample.present && runStart === null) runStart = index;
+    if ((sample.present || index === samples.length - 1) && runStart !== null) {
+      const from = x(runStart);
+      const to = x(sample.present ? index : index + 1);
+      add('rect', { x: from, y: 0, width: Math.max(1, to - from), height: 46, class: 'signal-gap' });
+      runStart = null;
+    }
+  });
+
+  // One band per contiguous run of readings: min-to-max shaded, mean on top.
+  let run = [];
+  const flush = () => {
+    if (run.length) {
+      const top = run.map(([px, sample]) => `${px},${y(sample.maxRssi ?? sample.rssi)}`);
+      const bottom = run.slice().reverse().map(([px, sample]) => `${px},${y(sample.minRssi ?? sample.rssi)}`);
+      if (run.length > 1) add('polygon', { points: top.concat(bottom).join(' '), class: 'signal-band' });
+      add('polyline', { points: run.map(([px, sample]) => `${px},${y(sample.rssi)}`).join(' '), class: 'signal-line' });
+      if (run.length === 1) add('circle', { cx: run[0][0], cy: y(run[0][1].rssi), r: 2, class: 'signal-dot' });
+    }
+    run = [];
+  };
+  samples.forEach((sample, index) => {
+    if (sample.rssi == null) flush();
+    else run.push([x(index), sample]);
+  });
+  flush();
+  return svg;
+}
+
+function signalCaption(history) {
+  if (!history || history.meanRssi == null) return '';
+  const parts = [`mean ${history.meanRssi} dBm`];
+  if (history.minRssi != null && history.maxRssi != null) parts.push(`${history.minRssi} to ${history.maxRssi}`);
+  const minutes = Math.round((history.coveredSeconds || 0) / 60);
+  if (minutes) parts.push(`over ${minutes} min`);
+  if (history.presentPercent != null && history.presentPercent < 100) parts.push(`present ${history.presentPercent}%`);
+  return parts.join(' · ');
+}
+
+// signalBlock is the whole row: chart, caption, or a plain sentence when there is
+// nothing to draw yet. Returns [] so callers can spread it into a list.
+function signalBlock(device, kind) {
+  const ext = deviceExtendedAddress(device) || device.extendedAddress;
+  if (!ext || !state.signalCapable) return [];
+  const history = signalTrail(ext);
+  const wrap = document.createElement('div');
+  wrap.className = 'signal-block';
+  if (!history || !(history.samples || []).length) {
+    const empty = document.createElement('small');
+    empty.className = 'signal-empty';
+    empty.textContent = 'No trail yet. Signal is recorded while the dashboard runs, and starts empty after a restart.';
+    wrap.append(empty);
+  } else {
+    wrap.append(signalChart(history));
+    const caption = document.createElement('small');
+    caption.className = 'signal-caption';
+    caption.textContent = signalCaption(history) || 'Presence only; this device reports no signal to itself.';
+    wrap.append(caption);
+  }
+  if (kind === 'popover') {
+    const item = document.createElement('div');
+    const term = document.createElement('dt');
+    term.textContent = 'Signal history';
+    item.append(term, wrap);
+    return [item];
+  }
+  const item = document.createElement('div');
+  item.className = 'device-signal-detail';
+  const heading = document.createElement('span');
+  heading.textContent = 'Signal history';
+  item.append(heading, wrap);
+  return [item];
+}
+
+// registrationRows describes what a device registered with the border router's
+// SRP server: whether it is registered at all, and what it advertises. This is the
+// only place a Thread device says what it is — a Matter device names the fabric
+// and node ID a controller knows it by — and the only way to tell "on the mesh but
+// invisible to the app" from "not on the mesh". Nothing is returned when the registry
+// is not being read (the REST fallback has no such data) so the rows do not read as
+// "nobody registered". Multi-line values are joined with newlines; both views render
+// them with pre-line whitespace.
+function registrationRows(device) {
+  const registryKnown = (state.devices?.items || []).some((item) => item.registration);
+  if (!registryKnown || device.isBorderRouter) return [];
+  const registration = device.registration;
+  const rows = [];
+  let status = 'Not registered';
+  let statusClass = 'link-strained';
+  if (registration?.lapsed) {
+    status = 'Lapsed';
+  } else if (registration) {
+    statusClass = '';
+    const parts = [];
+    if (registration.leaseSeconds != null && registration.remainingSeconds != null) {
+      parts.push(`Renewed ${durationText(registration.leaseSeconds - registration.remainingSeconds)} ago`);
+      parts.push(`expires in ${durationText(registration.remainingSeconds)}`);
+    }
+    status = parts.length ? parts.join(' · ') : 'Registered';
+  }
+  rows.push({ label: 'Registration', value: status, valueClass: statusClass });
+  const pairing = pairingService(device);
+  if (pairing) {
+    // The discriminator is how a controller tells two devices pairing at once apart.
+    const discriminator = pairing.txt?.D;
+    rows.push({ label: 'Pairing mode', value: discriminator ? `Open · discriminator ${discriminator}` : 'Open', valueClass: 'link-strained' });
+  }
+  const services = registration ? (device.services || []) : [];
+  const matter = services.filter((service) => service.type === '_matter._tcp');
+  if (matter.length) {
+    rows.push({ label: 'Matter', value: matter.map((service) => `Node ${service.nodeId} · ${service.fabricName || `fabric ${shortFabric(service.fabricId)}`}`).join('\n') });
+  }
+  const others = services.filter((service) => service.type !== '_matter._tcp' && service.type !== '_matterc._udp');
+  if (others.length) {
+    rows.push({ label: 'Services', value: others.map((service) => service.port ? `${service.type} · port ${service.port}` : service.type).join('\n') });
+  }
+  return rows;
+}
+
+function registrationItems(device) {
+  return registrationRows(device).map((row) => topologyInspectorItem(row.label, row.value, row.valueClass));
+}
+
+// The live mesh reader gives a device exactly its mesh-local and OMR addresses,
+// which have rows of their own, so the full list only earns a row when it holds
+// something else — a second OMR address from another border router's prefix, or
+// the extra entries the REST collection reports.
+function otherAddressesItem(device) {
+  const shown = new Set([device.omrIpv6Address || firstIPv6(device.ipv6Addresses), meshLocalAddress(device)].filter(Boolean));
+  const others = (device.ipv6Addresses || []).filter((address) => !shown.has(address));
+  return others.length ? [detailItem('Other addresses', others.join('\n'))] : [];
+}
+
+// The mesh reports the Thread protocol version number; readers know the spec
+// version it corresponds to.
+const THREAD_VERSION_NAMES = { 1: '1.0', 2: '1.1', 3: '1.2', 4: '1.3', 5: '1.4' };
+function threadVersionText(version) {
+  if (version == null || version === '') return null;
+  const name = THREAD_VERSION_NAMES[String(version)];
+  return name ? `Thread ${name} (${version})` : String(version);
+}
+
+// A compressed fabric ID is a 16-digit hash with no meaning to a reader beyond
+// telling two controllers apart, which its ends do.
+function shortFabric(fabric) {
+  return fabric && fabric.length > 8 ? `${fabric.slice(0, 4)}…${fabric.slice(-4)}` : fabric || '?';
+}
+
+function durationText(seconds) {
+  seconds = Math.max(0, Math.round(seconds));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.round(seconds / 360) / 10}h`;
+  return `${Math.round(seconds / 8640) / 10}d`;
 }
 
 // rerender=false when the caller is about to redraw the map anyway.
@@ -913,7 +1310,14 @@ function renderTopology() {
   const viewport = document.getElementById('topologyScroll');
   const measured = viewport ? viewport.clientWidth : 0;
   const available = measured > 320 ? measured : 1100;
-  const columns = Math.max(1, Math.floor((available - 48) / 180));
+  // Two columns at the desktop pitch need 408px, which a phone's map area does not
+  // have, so narrow screens use a tighter pitch and margin: two 154px cards then
+  // fit in 344px, where the desktop metrics stacked every cluster in one column.
+  const nodeWidth = 154;
+  const compact = available < 2 * 180 + 48;
+  const margin = compact ? 12 : 24;
+  const colPitch = compact ? nodeWidth + 12 : 180;
+  const columns = Math.max(1, Math.floor((available - 2 * margin + (colPitch - nodeWidth)) / colPitch));
   const signature = JSON.stringify([columns, devices, diagnosticTopology ? state.topology.links : null, [...attachments].map(([id, attachment]) => [id, attachment.device.id, attachment.source]), state.topologySelectedId, state.overview?.leaderRouterId ?? null]);
   if (signature === renderTopology.signature && stage.childElementCount) return;
   renderTopology.signature = signature;
@@ -950,9 +1354,7 @@ function renderTopology() {
   });
 
   const width = available;
-  const colPitch = 180;
   const rowPitch = 144;
-  const nodeWidth = 154;
   const nodeHeight = TOPOLOGY_NODE_HEIGHT;
   const parentGap = 62; // router bottom to the first child row
   const clusterGapX = 40;
@@ -963,11 +1365,14 @@ function renderTopology() {
   const naturalCols = count => (count <= 4 ? Math.max(1, count) : Math.ceil(Math.sqrt(count)));
   const naturalWidth = routers.reduce((total, router) => {
     const kids = (childrenByParent.get(router.id) || []).length;
-    return total + Math.max(1, naturalCols(kids)) * 180 + 40;
+    return total + Math.max(1, naturalCols(kids)) * colPitch + clusterGapX;
   }, 0);
   // Only squeeze when the natural layout genuinely does not fit. Capping
   // unconditionally wrapped three children onto two rows with the space to spare.
-  const clustersPerBand = naturalWidth - 40 <= available - 48 ? 1 : 2;
+  // Halving the columns to seat two clusters per band needs at least three to
+  // start with: at two it left each cluster one column wide, which is what put a
+  // phone back to single file after the compact metrics had made room for two.
+  const clustersPerBand = naturalWidth - clusterGapX <= available - 2 * margin || columns < 3 ? 1 : 2;
   const maxClusterCols = clustersPerBand === 1
     ? columns
     : Math.max(1, Math.floor((columns - 1) / 2));
@@ -984,19 +1389,41 @@ function renderTopology() {
 
   // Pack clusters left to right, wrapping to a new band when the next will not fit.
   const positionById = new Map();
-  let cursorX = 24;
+  let cursorX = margin;
   let bandTop = 78;
   let bandHeight = 0;
+  // A router with no children is one card, and sending it to a band of its own
+  // below a tall cluster read as a drop-off — on a phone the childless IKEA router
+  // landed beneath the border router's two rows of children. Instead it takes a
+  // spare slot in the band's last cluster's top row: that cluster's router moves
+  // from the centre to sit over its first child column, and the childless one
+  // goes in the next column. `host` is that cluster, `tucked` how many it seats.
+  let host = null;
+  let tucked = 0;
   clusters.forEach(cluster => {
-    if (cursorX > 24 && cursorX + cluster.width > width - 24) {
+    if (cursorX > margin && cursorX + cluster.width > width - margin) {
+      if (!cluster.kids.length && host && host.cols - 1 - tucked > 0) {
+        const hostRouter = positionById.get(host.router.id);
+        if (!tucked) hostRouter.x = host.left;
+        tucked += 1;
+        positionById.set(cluster.router.id, { x: hostRouter.x + tucked * colPitch, y: bandTop });
+        return;
+      }
       bandTop += bandHeight + clusterGapY;
       bandHeight = 0;
-      cursorX = 24;
+      cursorX = margin;
+      host = null;
+      tucked = 0;
     }
     positionById.set(cluster.router.id, {
       x: Math.round(cursorX + (cluster.width - nodeWidth) / 2),
       y: bandTop
     });
+    if (cluster.kids.length) {
+      // The first child column's x, where the router goes if something is tucked beside it.
+      host = { ...cluster, left: cursorX + Math.round((colPitch - nodeWidth) / 2) };
+      tucked = 0;
+    }
     cluster.kids.forEach((kid, index) => {
       const row = Math.floor(index / cluster.cols);
       const col = index % cluster.cols;
@@ -1019,7 +1446,7 @@ function renderTopology() {
   if (unresolved.length) {
     const unresolvedTop = contentBottom + 91;
     nodes.push(topologyLayerLabel('UNRESOLVED ATTACHMENTS', unresolvedTop - 51));
-    unresolvedPositions = topologyGrid(unresolved.length, columns, width, unresolvedTop, rowPitch);
+    unresolvedPositions = topologyGrid(unresolved.length, columns, width, unresolvedTop, rowPitch, colPitch, margin);
     contentBottom = unresolvedTop + (Math.ceil(unresolved.length / columns) - 1) * rowPitch + nodeHeight;
   }
   const routerPositions = routers.map(router => positionById.get(router.id));
@@ -1103,11 +1530,15 @@ function renderDeviceRows() {
     symbol.className = `device-symbol ${device.isBorderRouter ? 'border-router' : ''}`;
     symbol.replaceChildren(makeIcon(device.isBorderRouter ? 'hexagon' : 'endDevice'));
     const identity = document.createElement('span');
+    const nameRow = document.createElement('span');
+    nameRow.className = 'device-name-row';
     const name = document.createElement('b');
     name.textContent = deviceLabel(device, device.isBorderRouter ? 'Border Router' : `Thread device ${index + 1}`);
+    nameRow.append(name);
+    if (pairingService(device)) nameRow.append(pairingBadge('inline'));
     const id = document.createElement('small');
     id.textContent = device.isBorderRouter ? `${device.id} · LOCAL OTBR` : device.id;
-    identity.append(name, id);
+    identity.append(nameRow, id);
     primary.append(symbol, identity);
 
     const category = roleCategory(device.role);
@@ -1146,18 +1577,18 @@ function renderDeviceRows() {
     detail.className = `device-expanded ${expanded ? 'open' : ''}`.trim();
     detail.id = `device-detail-${index}`;
     detail.append(
-      detailItem('MLEID IID', device.mlEidIid),
-      detailItem('EUI-64', device.eui64),
       detailItem('Router ID', device.routerId),
       detailItem('OMR IPv6', device.omrIpv6Address || firstIPv6(device.ipv6Addresses)),
-      detailItem('Thread version', device.threadVersion),
+      detailItem('Thread version', threadVersionText(device.threadVersion)),
       detailItem('Link margin', device.linkMargin == null ? null : `${device.linkMargin} dB`),
       detailItem('Retries', linkHealth(device), linkIsStrained(device) ? 'link-strained' : ''),
       detailItem('Mesh-local', meshLocalAddress(device)),
-      detailItem('IPv6 addresses', (device.ipv6Addresses || []).join('\n')),
+      ...otherAddressesItem(device),
       detailItem('First discovered', device.firstSeen ? new Date(device.firstSeen).toLocaleString() : null),
       detailItem('Last updated', device.lastSeen ? new Date(device.lastSeen).toLocaleString() : null),
-      detailItem('Link quality / RSSI', [device.linkQuality == null ? null : `LQI ${device.linkQuality}`, device.rssi == null ? null : `${device.rssi} dBm`].filter(Boolean).join(' · '))
+      detailItem('Link quality / RSSI', [device.linkQuality == null ? null : `LQI ${device.linkQuality}`, device.rssi == null ? null : `${device.rssi} dBm`].filter(Boolean).join(' · ')),
+      ...registrationRows(device).map((row) => detailItem(row.label, row.value, row.valueClass)),
+      ...signalBlock(device, 'row')
     );
     const listExt = deviceExtendedAddress(device);
     if (listExt) {
@@ -1325,12 +1756,22 @@ function renderHistory(data) {
   }
 }
 
+// activeView resolves the hash to a view. Legacy hashes keep working: #overview,
+// #devices and #topology are the pre-merge names that all fold into home, and
+// #diagnostics is what the event log was called before.
+const VIEWS = ['network', 'channels', 'fabrics', 'events', 'help', 'manage'];
+
+function activeView() {
+  const requested = window.location.hash.slice(1);
+  if (requested === 'diagnostics') return 'events';
+  return VIEWS.includes(requested) ? requested : 'home';
+}
+
 function syncNavigation() {
   closeTerm();
   closeDevicePopover(false);
   const requested = window.location.hash.slice(1);
-  // #overview, #devices and #topology are the pre-merge hashes; they all land on home now.
-  const active = ['network', 'help', 'manage', 'diagnostics'].includes(requested) ? requested : 'home';
+  const active = activeView();
   if (requested === 'topology') setDeviceMode('map');
   document.querySelectorAll('[data-nav]').forEach(link => {
     const selected = link.dataset.nav === active;
@@ -1345,10 +1786,12 @@ function syncNavigation() {
   });
   const pageMeta = {
     home: [homeTitle(), 'THREAD MESH'],
-    network: ['Nearby Networks', 'THREAD SCAN'],
+    network: ['Nearby networks', 'THREAD SCAN'],
+    channels: ['Channel noise', 'RADIO SPECTRUM'],
+    fabrics: ['Matter fabrics', 'LAN BROWSE'],
     help: ['Help', 'THREAD GUIDE'],
     manage: ['Network Setup', 'MANAGE'],
-    diagnostics: ['Diagnostics', 'EVENT HISTORY']
+    events: ['Event log', 'MESH ACTIVITY']
   };
   document.getElementById('pageTitle').textContent = pageMeta[active][0];
   // .hidden carries !important; the bare [hidden] attribute loses to .title-meta's display:flex.
@@ -1356,20 +1799,24 @@ function syncNavigation() {
   document.getElementById('pageEyebrow').textContent = pageMeta[active][1];
   updateRefreshLabel();
   if (active === 'manage') loadNetworkConfig();
-  if (active === 'diagnostics') loadHistory();
+  if (active === 'events') loadHistory();
   if (active === 'home' && state.deviceMode === 'map') window.requestAnimationFrame(renderTopology);
   window.scrollTo({ top: 0, behavior: 'auto' });
 }
 
 function updateRefreshLabel() {
-  const hash = window.location.hash;
+  const view = activeView();
   // Home leads with the mesh, so its freshness is the map's; the strip falls back to overview.
   const meshTimestamp = state.deviceMode === 'map'
     ? state.topology?.lastSuccessfulRefresh || state.devices?.lastSuccessfulRefresh
     : state.devices?.lastSuccessfulRefresh;
-  const timestamp = hash === '#network'
-    ? state.networkScan?.scannedAt
-    : ['#help', '#manage', '#diagnostics'].includes(hash)
+  // Each on-demand view is as fresh as its own last scan, not as the poll. Keyed
+  // on the view rather than on the value, so one that has never been scanned
+  // still reads as unscanned instead of borrowing the mesh poll's timestamp.
+  const scanViews = { network: 'networkScan', channels: 'channelScan', fabrics: 'fabricScan' };
+  const timestamp = view in scanViews
+    ? state[scanViews[view]]?.scannedAt
+    : ['help', 'manage', 'events'].includes(view)
     ? state.overview?.lastSuccessfulRefresh
     : meshTimestamp || state.overview?.lastSuccessfulRefresh;
   const updated = document.querySelector('[data-updated]');
@@ -1435,23 +1882,36 @@ function deviceExtendedAddress(device) {
   return device.id || null;
 }
 
-function renameButton(ext, currentName, displayName) {
+// Naming covers two kinds of thing: devices, keyed by extended address, and
+// Matter fabrics, keyed by compressed fabric ID. Both go through one popover and
+// the same store on the server; only the route and the wording differ.
+const RENAME_KINDS = {
+  device: { eyebrow: 'DEVICE NAME', title: 'Rename device', saved: 'Device name saved', removed: 'Device name removed', route: (key) => `/api/v1/devices/${encodeURIComponent(key)}/name` },
+  fabric: { eyebrow: 'FABRIC NAME', title: 'Name this fabric', saved: 'Fabric name saved', removed: 'Fabric name removed', route: (key) => `/api/v1/fabrics/${encodeURIComponent(key)}/name` }
+};
+
+function renameButton(key, currentName, displayName, kind = 'device') {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'rename-button';
   button.textContent = currentName ? 'Rename' : 'Add name';
   button.addEventListener('click', event => {
     event.stopPropagation();
-    openRename(ext, currentName || '', displayName);
+    openRename(key, currentName || '', displayName, kind);
   });
   return button;
 }
 
-function openRename(ext, currentName, displayName) {
+function openRename(key, currentName, displayName, kind = 'device') {
   const popover = document.getElementById('renamePopover');
-  state.renamingExt = ext;
-  document.getElementById('renameTarget').textContent = displayName || ext;
+  const words = RENAME_KINDS[kind];
+  state.renamingExt = key;
+  state.renamingKind = kind;
+  document.getElementById('renameEyebrow').textContent = words.eyebrow;
+  document.getElementById('renameTitle').textContent = words.title;
+  document.getElementById('renameTarget').textContent = displayName || key;
   const input = document.getElementById('renameInput');
+  input.placeholder = kind === 'fabric' ? 'e.g. Home Assistant' : 'e.g. Living room sensor';
   input.value = currentName;
   document.getElementById('renameClear').classList.toggle('hidden', !currentName);
   document.getElementById('renameError').classList.add('hidden');
@@ -1463,11 +1923,12 @@ function openRename(ext, currentName, displayName) {
 function closeRename() {
   document.getElementById('renamePopover').classList.add('hidden');
   state.renamingExt = null;
+  state.renamingKind = 'device';
 }
 
-async function renameDevice(ext, name) {
+async function renameDevice(key, name, kind = 'device') {
   const trimmed = name.trim();
-  const response = await fetch(`/api/v1/devices/${encodeURIComponent(ext)}/name`, {
+  const response = await fetch(RENAME_KINDS[kind].route(key), {
     method: trimmed ? 'PUT' : 'DELETE',
     headers: trimmed ? { 'Content-Type': 'application/json' } : undefined,
     body: trimmed ? JSON.stringify({ name: trimmed }) : undefined,
@@ -1480,13 +1941,22 @@ async function renameDevice(ext, name) {
 }
 
 async function submitRename(name) {
-  const ext = state.renamingExt;
-  if (!ext) return;
+  const key = state.renamingExt;
+  const kind = state.renamingKind || 'device';
+  if (!key) return;
   try {
-    await renameDevice(ext, name);
+    await renameDevice(key, name, kind);
     closeRename();
-    showToast(name.trim() ? 'Device name saved' : 'Device name removed');
+    showToast(name.trim() ? RENAME_KINDS[kind].saved : RENAME_KINDS[kind].removed);
     await loadData();
+    // The fabric cards are not part of the polled data, so relabel them in place.
+    if (kind === 'fabric' && state.fabricScan) {
+      const trimmed = name.trim();
+      for (const fabric of state.fabricScan.fabrics || []) {
+        if (fabric.id.toLowerCase() === key.toLowerCase()) fabric.customName = trimmed;
+      }
+      renderFabrics(state.fabricScan);
+    }
   } catch (error) {
     const note = document.getElementById('renameError');
     note.textContent = error.message;
@@ -1697,6 +2167,7 @@ function showToast(message) {
 document.getElementById('refreshButton').addEventListener('click', () => loadData(true));
 document.getElementById('scanNetworksButton').addEventListener('click', scanNetworks);
 document.getElementById('scanChannelsButton').addEventListener('click', scanChannels);
+document.getElementById('browseFabricsButton').addEventListener('click', browseFabrics);
 document.getElementById('refreshHistoryButton').addEventListener('click', loadHistory);
 document.getElementById('termClose').addEventListener('click', () => closeTerm(true));
 document.addEventListener('keydown', event => {

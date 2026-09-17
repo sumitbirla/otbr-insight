@@ -16,6 +16,7 @@ import (
 	"github.com/otbr-insight/otbr-insight/internal/mcpserver"
 	"github.com/otbr-insight/otbr-insight/internal/model"
 	"github.com/otbr-insight/otbr-insight/internal/names"
+	namesstore "github.com/otbr-insight/otbr-insight/internal/names"
 	"github.com/otbr-insight/otbr-insight/internal/otbr"
 )
 
@@ -89,6 +90,41 @@ func Handler(data Snapshotter, names NameStore, control NetworkController, backu
 		logger.Info("device name cleared", "extendedAddress", ext)
 		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"extendedAddress": ext, "name": ""}})
 	})
+	// Fabric labels live in the same store under a "fabric:" prefix, so one
+	// file holds everything the user has named.
+	mux.HandleFunc("PUT /api/v1/fabrics/{id}/name", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var body struct {
+			Name string `json:"name"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := names.Set(namesstore.FabricKey(id), body.Name); err != nil {
+			writeNameError(w, err)
+			return
+		}
+		logger.Info("fabric name set", "fabricId", id)
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"fabricId": id, "name": strings.TrimSpace(body.Name)}})
+	})
+	mux.HandleFunc("DELETE /api/v1/fabrics/{id}/name", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := names.Delete(namesstore.FabricKey(id)); err != nil {
+			writeNameError(w, err)
+			return
+		}
+		logger.Info("fabric name cleared", "fabricId", id)
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"fabricId": id, "name": ""}})
+	})
+	// Per-device signal trail, kept in memory by the monitor. Registered only when
+	// the data source records one, like the other optional capabilities.
+	if trails, ok := data.(interface {
+		SignalHistory(string) model.SignalHistory
+	}); ok {
+		mux.HandleFunc("GET /api/v1/devices/{ext}/signal", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"data": trails.SignalHistory(r.PathValue("ext"))})
+		})
+	}
 	mux.HandleFunc("GET /api/v1/networks", func(w http.ResponseWriter, r *http.Request) {
 		// Three channel-by-channel discovery passes take about 25 s, on the edge of
 		// the server's write timeout; extend it for this request alone.
@@ -119,6 +155,27 @@ func Handler(data Snapshotter, names NameStore, control NetworkController, backu
 				}})
 				return
 			}
+			writeJSON(w, http.StatusOK, map[string]any{"data": scan})
+		})
+	}
+	// Matter fabrics seen on the LAN, on demand. Registered only when the data
+	// source can browse mDNS. User labels are overlaid on nodes that are mesh
+	// devices, the same way the device list gets them.
+	if browser, ok := data.(interface {
+		MatterFabrics(context.Context) (*model.FabricScan, error)
+	}); ok {
+		mux.HandleFunc("GET /api/v1/fabrics", func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			defer cancel()
+			scan, err := browser.MatterFabrics(ctx)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"data": model.FabricScan{
+					Status: "unavailable", Fabrics: []model.MatterFabric{}, Source: "mDNS browse",
+					ScannedAt: time.Now().UTC(), Error: err.Error(),
+				}})
+				return
+			}
+			applyFabricNames(scan, names.Snapshot())
 			writeJSON(w, http.StatusOK, map[string]any{"data": scan})
 		})
 	}
@@ -476,6 +533,27 @@ func applyDeviceNames(inventory *model.DeviceInventory, labels map[string]string
 		if name, ok := labels[nameKey(inventory.Items[i].ExtendedAddress, inventory.Items[i].ID)]; ok {
 			inventory.Items[i].CustomName = name
 		}
+		for j := range inventory.Items[i].Services {
+			service := &inventory.Items[i].Services[j]
+			if service.FabricID != "" {
+				service.FabricName = labels[namesstore.FabricKey(service.FabricID)]
+			}
+		}
+	}
+}
+
+func applyFabricNames(scan *model.FabricScan, labels map[string]string) {
+	if len(labels) == 0 {
+		return
+	}
+	for f := range scan.Fabrics {
+		scan.Fabrics[f].CustomName = labels[namesstore.FabricKey(scan.Fabrics[f].ID)]
+		for n := range scan.Fabrics[f].Nodes {
+			node := &scan.Fabrics[f].Nodes[n]
+			if name, ok := labels[nameKey(node.ExtendedAddress, "")]; ok && node.ExtendedAddress != "" {
+				node.CustomName = name
+			}
+		}
 	}
 }
 
@@ -524,7 +602,7 @@ func requestLog(next http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		next.ServeHTTP(w, r)
-		if r.URL.Path != "/api/v1/overview" && r.URL.Path != "/api/v1/capabilities" && r.URL.Path != "/api/v1/devices" && r.URL.Path != "/api/v1/topology" && r.URL.Path != "/api/v1/networks" && r.URL.Path != "/api/v1/channels" {
+		if r.URL.Path != "/api/v1/overview" && r.URL.Path != "/api/v1/capabilities" && r.URL.Path != "/api/v1/devices" && r.URL.Path != "/api/v1/topology" && r.URL.Path != "/api/v1/networks" && r.URL.Path != "/api/v1/channels" && r.URL.Path != "/api/v1/fabrics" && !strings.HasSuffix(r.URL.Path, "/signal") {
 			logger.Debug("HTTP request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
 		}
 	})

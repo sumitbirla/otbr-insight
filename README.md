@@ -24,7 +24,7 @@ The rest follows from that gap:
 - **The mesh is drawn, not just listed.** Routers, their children, and which parent each device attached to, which is the thing that actually explains behaviour.
 - **Terms are explained in place.** RLOC16, partitions, OMR addressing, link margin: each has a `?` beside it, plus a short Thread guide built in. The vocabulary is the main barrier to understanding a Thread network, and hiding it behind a glossary elsewhere does not help.
 - **Values are given meaning.** Not just a signal number, but whether a link is straining; not just a device list, but which entries may be stale and why.
-- **State separates from history.** OpenThread records role changes, attachments and departures; the Diagnostics view surfaces them, so "it dropped off last night" is answerable.
+- **State separates from history.** OpenThread records role changes, attachments and departures; the Event log view surfaces them, so "it dropped off last night" is answerable.
 
 `otbr-web` remains the tool for what it does. Commissioning a device with a PSKd or a QR code, managing on-mesh prefixes, and the ePSKc flow are all implemented there and deliberately **not** here. The two can run side by side; if you keep `otbr-web` for commissioning, note that this app will also use its `available_network` and `get_properties` endpoints when the daemon socket is unavailable.
 
@@ -39,10 +39,13 @@ The rest follows from that gap:
 - Live status: online, network disabled, stale data, or OTBR offline, with the last valid snapshot kept while OTBR is unreachable
 - Live mesh data when the daemon socket is available: devices appear and disappear as they attach, with no discovery sweep and no stale cache. Over REST alone, a periodic sweep is posted instead
 - Per-device link health: signal, link margin, and frame/message retry rates, flagged when a link is straining
-- Diagnostics view of OpenThread's own event history — attachments, departures, role and partition changes — covering time before the dashboard was running
+- Signal history per device: a two-hour sparkline of mean, best and worst RSSI with gaps where the device was not there at all, so an intermittent link reads differently from a steadily weak one. Kept in memory, so it starts empty after a restart
+- Event log of OpenThread's own recorded history — attachments, departures, role and partition changes — covering time before the dashboard was running
 - Reachability testing from the border router, which can reach mesh-local addresses a browser cannot
 - On-demand scan of nearby Thread networks, three discovery passes merged, with your own network always shown first — from the border router's own knowledge, since a scan hears a network only when *another* router in it answers
 - Channel noise measurement: about ten seconds of repeated sweeps over the 16 channels, showing the loudest and typical signal on each, graded against the quietest, with Wi-Fi overlap marked and the current channel assessed
+- What each device advertises, from the border router's SRP registry: whether it is registered at all (the difference between "on the mesh" and "visible to controllers"), its Matter node ID on each fabric it is commissioned into, and and whether a commissioning window is open on it right now, badged on the map and the device list
+- Matter fabrics on the LAN, browsed over mDNS: one card per controller's fabric with every node on it, the ones on this mesh named and flagged. Works with an empty mesh too, since Wi-Fi Matter devices and hubs advertise as well. Fabrics can be labelled ("Home Assistant", "Apple Home") and the label replaces the hash wherever the fabric appears
 - Built-in Thread guide and contextual explanations for terms such as RLOC16, partitions, and OMR addressing
 - Dark and light themes, responsive layout for desktop and tablet
 
@@ -59,7 +62,7 @@ Every destructive action is confirmed in a dialog before it is sent.
 **Assistant access** (MCP)
 
 - Built-in Model Context Protocol server at `/mcp`, no extra process or configuration
-- Seven tools covering the network summary, device list, topology, event history, reachability testing, nearby-network scan and channel noise
+- Nine tools covering the network summary, device list, topology, event history, signal history, reachability testing, nearby-network scan, channel noise and Matter fabrics
 - Results shaped for a language model: device names instead of hex, parents by name, ages in seconds, topology nested by router
 - Read-only by design — no network writes and no credentials over MCP
 
@@ -205,8 +208,12 @@ The browser talks only to this API; it never contacts OTBR directly. Responses a
 | `GET /api/v1/capabilities` | Which optional OTBR endpoints this build supports |
 | `GET /api/v1/networks` | Performs an on-demand active scan for nearby networks: three channel-by-channel discovery passes merged over the socket (about 25 seconds), one otbr-web scan otherwise; `passes` says which |
 | `GET /api/v1/channels` | Repeated energy scans over about ten seconds; `sweeps`, `currentChannel` and `channels[]` of `{channel, maxRssi, typicalRssi}` |
+| `GET /api/v1/fabrics` | Browses the LAN over mDNS for Matter nodes (about three seconds) and groups them by fabric, merged with the mesh devices' own SRP registrations; nodes on this mesh carry `extendedAddress`, `onMesh` and any `customName` |
+| `PUT /api/v1/fabrics/{id}/name` | Assigns a label to a Matter fabric (body `{"name": "Home Assistant"}`), shown on the fabric card and beside each device's node ID |
+| `DELETE /api/v1/fabrics/{id}/name` | Removes a fabric label |
 | `GET /api/v1/network` | Interface state and the credential-masked active dataset, plus backup metadata |
 | `GET /api/v1/network/credentials` | The unmasked network key, PSKc, and dataset TLV |
+| `GET /api/v1/devices/{ext}/signal` | The device's two-hour signal trail in one-minute buckets, each with mean, min and max RSSI and whether the device was present |
 | `GET /api/v1/history` | OpenThread's recorded role, partition, and neighbour events, with user names overlaid; needs the daemon socket |
 | `GET /api/v1/health` | `{"status", "apiHealth"}`; returns 503 when OTBR is offline and no snapshot has ever been received |
 | `POST /mcp` | Model Context Protocol endpoint; see [Assistant access (MCP)](#assistant-access-mcp) |
@@ -261,14 +268,16 @@ No token or header is required. The client must be on the same LAN as the dashbo
 | Tool | Arguments | Returns | Needs |
 | --- | --- | --- | --- |
 | `get_network` | — | Network name, channel, PAN ID, extended PAN ID and mesh-local prefix; the border router's role, state, RLOC16, addresses and firmware versions; leader, partition and router count; and **device counts** — total, routers, end devices, unnamed, and any device not heard from in ten minutes, by name. It does **not** include the device list, so it stays cheap to call first | REST |
-| `list_devices` | `role` (`router` or `end-device`), `query` (substring of name, extended address or RLOC16) | One entry per device: name, extended address, role, parent **by name**, seconds since last heard, RSSI, link quality (0–3), link margin, frame and message error rates, mesh-local and OMR addresses | REST; live data with the socket |
+| `list_devices` | `role` (`router` or `end-device`), `query` (substring of name, extended address or RLOC16) | One entry per device: name, extended address, role, parent **by name**, seconds since last heard, RSSI, link quality (0–3), link margin, frame and message error rates, mesh-local and OMR addresses, Thread version, and what it registered with SRP: registration status and its Matter services with fabric and node ID | REST; live data with the socket |
 | `get_topology` | — | Each router with the children attached to it, ordered border router first, then the leader; router-to-router links with link quality in/out, path cost and RSSI; and a separate list of children whose parent could not be resolved | REST; live data with the socket |
 | `get_history` | `device` (name, extended address or RLOC16), `limit` (default 30) | OpenThread's own event log, newest first, with each entry's age in seconds: role and partition changes for the border router, and devices attaching or detaching with the signal at the time | Daemon socket |
 | `ping_device` | `device` (name, extended address, RLOC16 or IPv6 address), `count` (1–10, default 3) | Sent and received counts and min/average/max round trip, plus which address was used. Prefers the mesh-local address, which survives roaming | Daemon socket |
 | `scan_networks` | — | Other Thread networks on the air: name, extended PAN ID, PAN ID, channel and the beaconing device's address | Socket or `otbr-web` |
+| `get_signal_history` | `device` (name, extended address or RLOC16) | Mean, best and worst RSSI over the last couple of hours, the share of the window the device was present, and a series of at most 24 points so a trend or a dip is visible | In-memory trail |
 | `scan_channels` | — | About ten seconds of sweeps: loudest and typical signal per channel, each graded quiet, moderate or busy against the quietest, its Wi-Fi overlap, the three quietest channels, and a one-sentence assessment of the current channel | Socket or REST |
+| `list_fabrics` | — | Matter fabrics with nodes on the LAN, one entry per controller: node IDs, hostnames, ports and addresses, with the nodes on this mesh named and flagged. About three seconds | mDNS on the LAN, plus the SRP registry with the socket |
 
-All seven tools are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
+All nine tools are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
 
 A device can be named any way the dashboard shows it. `ping_device` with `"kitchen sensor"` matches the label you gave it (case-insensitively, and by unique substring), `"0x0401"` matches an RLOC16, and a bare IPv6 address is used as given. When no device matches, the error says so and points at `list_devices`.
 
@@ -328,13 +337,13 @@ The adapter normalizes several OTBR REST API variants. Behaviour observed on rea
 - Node status is read from `/api/node` with a fallback to the legacy `/node`. Some builds serve a stale `/api/node` after a dataset change, so live fields from `/node` are overlaid on top.
 - `/api/devices` and `/api/diagnostics` are caches that OTBR fills only when asked — it runs no discovery of its own. Left alone they freeze indefinitely: one border router was observed serving a 45-day-old device list. Over REST the app posts a device-collection sweep plus a per-router diagnostic query at startup and every `--discovery-interval`. With the daemon socket it reads the mesh directly instead and skips the sweeps entirely.
 - The REST action list offers no active network scan. `getEnergyScanTask` is an energy-detect scan reporting RSSI per channel, not the networks on air, so nearby-network scanning needs either otbr-web or the daemon socket.
-- Error rates are a rolling average over roughly the last 64 transmissions to a neighbour, not a total, and they **reset when a device attaches**. A device that has just joined or roamed reports a near-zero rate that climbs for several minutes; read them alongside the attach events in the Diagnostics view.
+- Error rates are a rolling average over roughly the last 64 transmissions to a neighbour, not a total, and they **reset when a device attaches**. A device that has just joined or roamed reports a near-zero rate that climbs for several minutes; read them alongside the attach events in the Event log view.
 - Changing the active dataset requires disabling the interface first. The app always performs disable, write, enable as one serialized operation.
 - Leaving a network is implemented as disable plus delete-dataset. A true factory reset needs `ot-ctl`, which the app deliberately does not use.
 
 ## Tools
 
-`tools/matter-xref` is a standalone command, not part of the server, that matches Matter node IDs to mesh devices. A commissioned Matter device advertises `_matter._tcp` over mDNS with its Thread extended address as the hostname, which is the key OTBR Insight uses for devices. It shells out to `dns-sd` (macOS) or `avahi-browse` (Linux):
+`tools/matter-xref` is a standalone command, not part of the server, that matches Matter node IDs to mesh devices. A commissioned Matter device advertises `_matter._tcp` over mDNS with its Thread extended address as the hostname, which is the key OTBR Insight uses for devices. The server now does the same browse itself (the Matter fabrics panel and `GET /api/v1/fabrics`); the tool predates that and remains as a LAN-side check, shelling out to `dns-sd` (macOS) or `avahi-browse` (Linux):
 
 ```sh
 go run ./tools/matter-xref -api http://127.0.0.1:8088
@@ -358,7 +367,7 @@ OTBR REST API  ─┐                                                          �
 daemon socket  ─┘   via internal/otctl                                     └→ internal/mcpserver  (/mcp)
 ```
 
-`internal/model` is the normalized contract shared by every layer. The OTBR client implements `service.ThreadProvider`. `internal/otctl` is injected into it through small optional interfaces — mesh reader, scanner, status reader, history reader, pinger — so `internal/otbr` never imports it and an absent socket simply means absent capability. `internal/mcpserver` sits beside the REST handlers on the same mux and reads the same snapshots and name store, reshaping them for a language model; it is the one place the module takes a dependency, on the official MCP Go SDK. `internal/names` and `internal/backup` are the only persistent state.
+`internal/model` is the normalized contract shared by every layer. The OTBR client implements `service.ThreadProvider`. `internal/otctl` is injected into it through small optional interfaces — mesh reader, scanner, status reader, history reader, pinger — so `internal/otbr` never imports it and an absent socket simply means absent capability. `internal/mcpserver` sits beside the REST handlers on the same mux and reads the same snapshots and name store, reshaping them for a language model; it is one of two places the module takes a dependency, on the official MCP Go SDK; the other is `internal/mdns`, a one-shot multicast DNS browser on `golang.org/x/net`'s wire-format parser, which `internal/matter` uses to group Matter nodes by fabric. `internal/names` and `internal/backup` are the only persistent state.
 
 ## License
 

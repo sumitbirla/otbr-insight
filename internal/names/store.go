@@ -160,9 +160,25 @@ func (s *Store) persistLocked() error {
 	return nil
 }
 
+// FabricKey is the store key for a Matter fabric label: the compressed fabric
+// ID under a prefix, so it can never collide with a device's extended address
+// even though both are sixteen hex digits.
+func FabricKey(fabricID string) string {
+	return fabricPrefix + strings.ToLower(strings.TrimSpace(fabricID))
+}
+
+const fabricPrefix = "fabric:"
+
 // normalizeExt lowercases an extended address and strips an optional 0x prefix.
+// A fabric key ("fabric:<id>") is accepted with the same shape under its prefix.
 func normalizeExt(ext string) (string, error) {
 	clean := strings.ToLower(strings.TrimSpace(ext))
+	if id, ok := strings.CutPrefix(clean, fabricPrefix); ok {
+		if !extPattern.MatchString(id) {
+			return "", fmt.Errorf("invalid fabric id %q", ext)
+		}
+		return fabricPrefix + id, nil
+	}
 	clean = strings.TrimPrefix(clean, "0x")
 	if !extPattern.MatchString(clean) {
 		return "", fmt.Errorf("invalid extended address %q", ext)

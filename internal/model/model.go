@@ -82,6 +82,39 @@ type Device struct {
 	LinkQuality      *int     `json:"linkQuality,omitempty"`
 	LinkMargin       *int     `json:"linkMargin,omitempty"`
 	IsBorderRouter   bool     `json:"isBorderRouter"`
+	// Registration and Services come from the border router's SRP registry, the
+	// only place a Thread device says what it is. Both are nil when the device
+	// has never registered or the registry cannot be read.
+	Registration *ServiceRegistration `json:"registration,omitempty"`
+	Services     []AdvertisedService  `json:"services,omitempty"`
+}
+
+// ServiceRegistration is a device's host record with the border router's SRP
+// (Service Registration Protocol) server. A device renews it periodically; a
+// lapsed one means the device is on the mesh but invisible to the LAN.
+type ServiceRegistration struct {
+	// Lapsed is set when the device withdrew or stopped renewing its host
+	// record; the entry lingers until its key lease expires.
+	Lapsed           bool `json:"lapsed"`
+	LeaseSeconds     *int `json:"leaseSeconds,omitempty"`
+	RemainingSeconds *int `json:"remainingSeconds,omitempty"`
+	// Commissionable is set while the device advertises a Matter commissioning
+	// window, which it does only while in pairing mode.
+	Commissionable bool `json:"commissionable"`
+}
+
+// AdvertisedService is one service instance a device registered with SRP.
+// Matter operational services (_matter._tcp) name the fabric and node in the
+// instance name, which FabricID and NodeID carry decoded.
+type AdvertisedService struct {
+	Instance string            `json:"instance"`
+	Type     string            `json:"type"`
+	Port     *int              `json:"port,omitempty"`
+	TXT      map[string]string `json:"txt,omitempty"`
+	FabricID string            `json:"fabricId,omitempty"`
+	// FabricName is the user's label for the fabric, overlaid on read.
+	FabricName string `json:"fabricName,omitempty"`
+	NodeID     string `json:"nodeId,omitempty"`
 }
 
 type DeviceInventory struct {
@@ -189,6 +222,66 @@ type NetworkScan struct {
 }
 
 // PingResult reports a reachability test run from the border router.
+// MatterNode is one Matter operational node advertised on the LAN. Thread nodes
+// are advertised by the border router on the devices' behalf, with the device's
+// extended address as hostname, which is how OnMesh and ExtendedAddress are set.
+type MatterNode struct {
+	NodeID          string   `json:"nodeId"`
+	Host            string   `json:"host,omitempty"`
+	Port            *int     `json:"port,omitempty"`
+	Addresses       []string `json:"addresses,omitempty"`
+	ExtendedAddress string   `json:"extendedAddress,omitempty"`
+	CustomName      string   `json:"customName,omitempty"`
+	OnMesh          bool     `json:"onMesh"`
+}
+
+// MatterFabric groups the nodes that share a compressed fabric ID: one
+// controller's trust domain, spanning Thread, Wi-Fi and Ethernet alike.
+type MatterFabric struct {
+	ID         string       `json:"id"`
+	CustomName string       `json:"customName,omitempty"`
+	NodeCount  int          `json:"nodeCount"`
+	MeshCount  int          `json:"meshCount"`
+	Nodes      []MatterNode `json:"nodes"`
+}
+
+type FabricScan struct {
+	Status     string         `json:"status"`
+	Fabrics    []MatterFabric `json:"fabrics"`
+	NodeCount  int            `json:"nodeCount"`
+	Source     string         `json:"source"`
+	ScannedAt  time.Time      `json:"scannedAt"`
+	DurationMs int64          `json:"durationMs"`
+	Error      string         `json:"error,omitempty"`
+}
+
+// SignalSample is one time bucket of a device's radio link. A bucket with no
+// samples records that the device was not in the inventory at all, which is what
+// separates "quiet but healthy" from "gone".
+type SignalSample struct {
+	At       time.Time `json:"at"`
+	Present  bool      `json:"present"`
+	Samples  int       `json:"samples,omitempty"`
+	RSSI     *int      `json:"rssi,omitempty"`    // mean across the bucket
+	MinRSSI  *int      `json:"minRssi,omitempty"` // worst reading in the bucket
+	MaxRSSI  *int      `json:"maxRssi,omitempty"`
+	LinkQual *int      `json:"linkQuality,omitempty"`
+}
+
+// SignalHistory is a device's recent link, oldest sample first.
+type SignalHistory struct {
+	ExtendedAddress string         `json:"extendedAddress"`
+	BucketSeconds   int            `json:"bucketSeconds"`
+	WindowSeconds   int            `json:"windowSeconds"`
+	Samples         []SignalSample `json:"samples"`
+	// Summary over the window, across buckets that carried a reading.
+	MeanRSSI    *int `json:"meanRssi,omitempty"`
+	MinRSSI     *int `json:"minRssi,omitempty"`
+	MaxRSSI     *int `json:"maxRssi,omitempty"`
+	PresentPct  *int `json:"presentPercent,omitempty"`
+	CoveredSecs int  `json:"coveredSeconds"`
+}
+
 type PingResult struct {
 	Address   string   `json:"address"`
 	Reachable bool     `json:"reachable"`

@@ -8,10 +8,10 @@
 // address. That extended address is exactly what OTBR Insight keys devices on, so
 // the two join exactly.
 //
-// Browsing mDNS needs the OS resolver (no Go standard library support and this
-// repo carries no dependencies), so this shells out to dns-sd on macOS or
-// avahi-browse on Linux. That is why it is a tool and not part of the server,
-// which talks only to the OTBR REST API.
+// This predates the server's own browser (internal/mdns, surfaced as the
+// "Matter fabrics" panel and /api/v1/fabrics) and shells out to dns-sd on macOS
+// or avahi-browse on Linux instead. It remains as a LAN-side check that needs
+// only a running server to query.
 //
 // Usage: go run ./tools/matter-xref [-api http://127.0.0.1:8088] [-wait 6s]
 package main

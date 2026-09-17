@@ -30,6 +30,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/otbr-insight/otbr-insight/internal/model"
+	"github.com/otbr-insight/otbr-insight/internal/names"
 )
 
 // Snapshots is the subset of the monitor the tools read. It is satisfied by
@@ -70,12 +71,25 @@ type EnergyScanner interface {
 	EnergyScan(ctx context.Context) (*model.EnergyScan, error)
 }
 
+// SignalTrails serves each device's recent radio-link history; optional,
+// satisfied by service.Monitor.
+type SignalTrails interface {
+	SignalHistory(ext string) model.SignalHistory
+}
+
+// FabricBrowser lists Matter fabrics on the LAN; optional, satisfied by service.Monitor.
+type FabricBrowser interface {
+	MatterFabrics(ctx context.Context) (*model.FabricScan, error)
+}
+
 type server struct {
 	data    Snapshots
 	labels  Labels
 	pinger  Pinger
 	history HistoryProvider
 	energy  EnergyScanner
+	fabrics FabricBrowser
+	trails  SignalTrails
 	logger  *slog.Logger
 }
 
@@ -90,6 +104,8 @@ func Handler(data Snapshots, labels Labels, provider any, logger *slog.Logger) h
 	s.pinger, _ = provider.(Pinger)
 	s.history, _ = provider.(HistoryProvider)
 	s.energy, _ = data.(EnergyScanner)
+	s.fabrics, _ = data.(FabricBrowser)
+	s.trails, _ = data.(SignalTrails)
 
 	// The SDK logs every session at INFO, and in stateless mode every request is
 	// a session, so it only gets to speak up about problems.
@@ -120,6 +136,7 @@ Start with get_network for orientation; it includes device counts so you can dec
 Devices are identified by name (the user's label when one is set) and joined by extended address, a 16-hex-digit hardware identifier. RLOC16s change when a device roams; extended addresses do not.
 Signal: RSSI below about -85 dBm is weak; link quality is 0-3 where 3 is best. Error rates are fractions over roughly the last 64 transmissions, so a high rate with a strong RSSI points at interference rather than range.
 Sleepy end devices are battery powered and only wake to poll their parent; a ping to one can take several seconds and "last seen" of a minute or two is normal.
+Each device's "services" are what it registered with the border router's SRP server, which is how Thread devices become visible to controllers on the LAN. A Matter device carries one _matter._tcp service per fabric (controller) it is commissioned into, with the fabric and node ID; a _matterc._udp service means it is in pairing mode right now. A device on the mesh with no registration, or a lapsed one, is the usual cause of "joined Thread but the app cannot find it".
 These tools are read-only apart from ping_device, which makes the border router transmit but changes nothing. Network changes (form, join, leave) are not available here by design.`
 
 func buildVersion() string {
@@ -159,6 +176,20 @@ func (s *server) register(m *mcp.Server) {
 			Description: "Measure radio noise on every 2.4 GHz channel (11-26) from the border router over about ten seconds of repeated sweeps, and rank them: the loudest and typical signal heard on each, which Wi-Fi channel overlaps it, and the quietest choices. Ranking uses the loudest reading (worst case). Use it to judge whether the current channel is a good one. Takes about ten seconds.",
 			Annotations: readOnly("Scan channel noise"),
 		}, s.scanChannels)
+	}
+	if s.fabrics != nil {
+		mcp.AddTool(m, &mcp.Tool{
+			Name:        "list_fabrics",
+			Description: "Browse the LAN over mDNS for Matter operational nodes and group them by fabric (one per controller such as Home Assistant, Apple Home or Google Home). Each fabric lists its nodes with node ID, hostname, port and addresses, and flags which are devices on this Thread mesh (by name when labelled). A fabric carries the user's label as its name when one has been set; otherwise tell controllers apart by node numbering (Home Assistant counts up from 1) or by a node on a non-5540 port, which is a controller's own advert. Works even when the mesh is empty, since Wi-Fi Matter devices and hubs advertise too. Takes about three seconds.",
+			Annotations: readOnly("List Matter fabrics"),
+		}, s.listFabrics)
+	}
+	if s.trails != nil {
+		mcp.AddTool(m, &mcp.Tool{
+			Name:        "get_signal_history",
+			Description: "How one device's radio link has behaved over the last couple of hours: mean, best and worst RSSI, the share of the window it was present at all, and a coarse series so a trend or a dip is visible. Use it to tell a steadily weak link from an intermittent one, which RSSI alone cannot. The trail is kept in memory and starts empty after a restart, so coveredSeconds says how much of the window is real.",
+			Annotations: readOnly("Signal history"),
+		}, s.getSignalHistory)
 	}
 	if s.history != nil {
 		mcp.AddTool(m, &mcp.Tool{
@@ -289,6 +320,41 @@ type deviceSummary struct {
 	MeshLocalAddress string   `json:"meshLocalAddress,omitempty"`
 	OMRAddress       string   `json:"omrAddress,omitempty"`
 	ThreadVersion    string   `json:"threadVersion,omitempty"`
+	// From the border router's SRP registry: absent when the device never
+	// registered, which on a Matter device means controllers cannot reach it.
+	Registration *registrationSummary      `json:"registration,omitempty"`
+	Services     []model.AdvertisedService `json:"services,omitempty"`
+}
+
+type registrationSummary struct {
+	Status           string `json:"status"` // "registered" or "lapsed"
+	RemainingSeconds *int   `json:"leaseRemainingSeconds,omitempty"`
+	Commissionable   bool   `json:"inPairingMode,omitempty"`
+}
+
+// fabricNamed overlays the user's fabric labels on a device's services.
+func fabricNamed(labels map[string]string, services []model.AdvertisedService) []model.AdvertisedService {
+	if len(services) == 0 {
+		return nil
+	}
+	out := append([]model.AdvertisedService(nil), services...)
+	for i := range out {
+		if out[i].FabricID != "" {
+			out[i].FabricName = labels[names.FabricKey(out[i].FabricID)]
+		}
+	}
+	return out
+}
+
+func summarizeRegistration(device model.Device) *registrationSummary {
+	if device.Registration == nil {
+		return nil
+	}
+	status := "registered"
+	if device.Registration.Lapsed {
+		status = "lapsed"
+	}
+	return &registrationSummary{Status: status, RemainingSeconds: device.Registration.RemainingSeconds, Commissionable: device.Registration.Commissionable}
 }
 
 type deviceList struct {
@@ -330,6 +396,7 @@ func (s *server) listDevices(_ context.Context, _ *mcp.CallToolRequest, in listD
 			LinkMargin: device.LinkMargin, FrameErrorRate: device.FrameErrorRate, MessageErrorRate: device.MessageErrorRate,
 			OMRAddress: device.OMRIPv6Address, ThreadVersion: device.ThreadVersion,
 			MeshLocalAddress: meshLocalAddress(device, meshLocal, overview),
+			Registration:     summarizeRegistration(device), Services: fabricNamed(labels, device.Services),
 		}
 		if device.LastSeen != nil {
 			age := int64(now.Sub(*device.LastSeen).Seconds())
@@ -471,6 +538,100 @@ func routerRank(c *routerCluster) int {
 	}
 }
 
+// --- get_signal_history ----------------------------------------------------
+
+type signalInput struct {
+	Device string `json:"device" jsonschema:"Device name, extended address or RLOC16."`
+}
+
+type signalPoint struct {
+	At       time.Time `json:"at"`
+	RSSI     *int      `json:"rssi,omitempty"`
+	MinRSSI  *int      `json:"minRssi,omitempty"`
+	MaxRSSI  *int      `json:"maxRssi,omitempty"`
+	PresentP int       `json:"presentPercent"`
+}
+
+type signalView struct {
+	Name            string        `json:"name"`
+	ExtendedAddress string        `json:"extendedAddress,omitempty"`
+	CoveredSeconds  int           `json:"coveredSeconds"`
+	StepSeconds     int           `json:"stepSeconds"`
+	MeanRSSI        *int          `json:"meanRssi,omitempty"`
+	MinRSSI         *int          `json:"minRssi,omitempty"`
+	MaxRSSI         *int          `json:"maxRssi,omitempty"`
+	PresentPercent  *int          `json:"presentPercent,omitempty"`
+	Series          []signalPoint `json:"series"`
+	Note            string        `json:"note,omitempty"`
+}
+
+// signalSeriesPoints is how many points the series is reduced to. The trail keeps
+// one bucket a minute; handing a model 120 of them buries the shape in numbers.
+const signalSeriesPoints = 24
+
+func (s *server) getSignalHistory(_ context.Context, _ *mcp.CallToolRequest, in signalInput) (*mcp.CallToolResult, signalView, error) {
+	target := strings.TrimSpace(in.Device)
+	if target == "" {
+		return nil, signalView{}, errors.New("device is required")
+	}
+	labels := s.labels.Snapshot()
+	device := s.resolveDevice(strings.ToLower(target), labels)
+	if device == nil {
+		return nil, signalView{}, fmt.Errorf("no device matches %q; use list_devices to see names and addresses", target)
+	}
+	history := s.trails.SignalHistory(device.ExtendedAddress)
+	out := signalView{
+		Name: displayName(labels, *device), ExtendedAddress: device.ExtendedAddress,
+		CoveredSeconds: history.CoveredSecs, MeanRSSI: history.MeanRSSI, MinRSSI: history.MinRSSI,
+		MaxRSSI: history.MaxRSSI, PresentPercent: history.PresentPct, Series: []signalPoint{},
+	}
+	if len(history.Samples) == 0 {
+		out.Note = "No trail yet for this device; it is recorded in memory from the poll and starts empty after a restart."
+		return nil, out, nil
+	}
+	out.StepSeconds, out.Series = reduceSignal(history, signalSeriesPoints)
+	return nil, out, nil
+}
+
+// reduceSignal folds the minute buckets into at most points groups, averaging
+// RSSI across each and keeping the extremes, so a dip survives the reduction.
+func reduceSignal(history model.SignalHistory, points int) (stepSeconds int, series []signalPoint) {
+	size := (len(history.Samples) + points - 1) / points
+	if size < 1 {
+		size = 1
+	}
+	series = []signalPoint{}
+	for start := 0; start < len(history.Samples); start += size {
+		end := min(start+size, len(history.Samples))
+		group := history.Samples[start:end]
+		point := signalPoint{At: group[0].At}
+		total, count, present := 0, 0, 0
+		for _, sample := range group {
+			if sample.Present {
+				present++
+			}
+			if sample.RSSI == nil {
+				continue
+			}
+			total += *sample.RSSI * max(sample.Samples, 1)
+			count += max(sample.Samples, 1)
+			if point.MinRSSI == nil || *sample.MinRSSI < *point.MinRSSI {
+				point.MinRSSI = sample.MinRSSI
+			}
+			if point.MaxRSSI == nil || *sample.MaxRSSI > *point.MaxRSSI {
+				point.MaxRSSI = sample.MaxRSSI
+			}
+		}
+		if count > 0 {
+			mean := int(float64(total)/float64(count) - 0.5)
+			point.RSSI = &mean
+		}
+		point.PresentP = present * 100 / len(group)
+		series = append(series, point)
+	}
+	return size * history.BucketSeconds, series
+}
+
 // --- scan_networks ---------------------------------------------------------
 
 func (s *server) scanNetworks(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, *model.NetworkScan, error) {
@@ -479,6 +640,56 @@ func (s *server) scanNetworks(ctx context.Context, _ *mcp.CallToolRequest, _ str
 		return nil, nil, fmt.Errorf("scan unavailable: %w", err)
 	}
 	return nil, scan, nil
+}
+
+// --- list_fabrics ----------------------------------------------------------
+
+type fabricNode struct {
+	NodeID          string   `json:"nodeId"`
+	Name            string   `json:"name,omitempty"`
+	OnMesh          bool     `json:"onThisMesh"`
+	ExtendedAddress string   `json:"extendedAddress,omitempty"`
+	Host            string   `json:"host,omitempty"`
+	Port            *int     `json:"port,omitempty"`
+	Addresses       []string `json:"addresses,omitempty"`
+}
+
+type fabricView struct {
+	ID        string       `json:"fabricId"`
+	Name      string       `json:"name,omitempty"`
+	NodeCount int          `json:"nodeCount"`
+	MeshCount int          `json:"nodesOnThisMesh"`
+	Nodes     []fabricNode `json:"nodes"`
+}
+
+type fabricList struct {
+	Status    string       `json:"status"`
+	Source    string       `json:"source,omitempty"`
+	ScannedAt time.Time    `json:"scannedAt"`
+	NodeCount int          `json:"nodeCount"`
+	Fabrics   []fabricView `json:"fabrics"`
+	Error     string       `json:"error,omitempty"`
+}
+
+func (s *server) listFabrics(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, fabricList, error) {
+	scan, err := s.fabrics.MatterFabrics(ctx)
+	if err != nil {
+		return nil, fabricList{}, fmt.Errorf("browse unavailable: %w", err)
+	}
+	labels := s.labels.Snapshot()
+	out := fabricList{Status: scan.Status, Source: scan.Source, ScannedAt: scan.ScannedAt, NodeCount: scan.NodeCount, Error: scan.Error, Fabrics: []fabricView{}}
+	for _, fabric := range scan.Fabrics {
+		view := fabricView{ID: fabric.ID, Name: labels[names.FabricKey(fabric.ID)], NodeCount: fabric.NodeCount, MeshCount: fabric.MeshCount, Nodes: []fabricNode{}}
+		for _, node := range fabric.Nodes {
+			entry := fabricNode{NodeID: node.NodeID, OnMesh: node.OnMesh, ExtendedAddress: node.ExtendedAddress, Host: node.Host, Port: node.Port, Addresses: node.Addresses}
+			if node.ExtendedAddress != "" {
+				entry.Name = labelFor(labels, node.ExtendedAddress, "")
+			}
+			view.Nodes = append(view.Nodes, entry)
+		}
+		out.Fabrics = append(out.Fabrics, view)
+	}
+	return nil, out, nil
 }
 
 // --- scan_channels ---------------------------------------------------------

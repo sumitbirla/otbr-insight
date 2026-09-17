@@ -16,6 +16,7 @@ import (
 	"github.com/otbr-insight/otbr-insight/internal/api"
 	"github.com/otbr-insight/otbr-insight/internal/backup"
 	"github.com/otbr-insight/otbr-insight/internal/config"
+	"github.com/otbr-insight/otbr-insight/internal/mdns"
 	"github.com/otbr-insight/otbr-insight/internal/names"
 	"github.com/otbr-insight/otbr-insight/internal/otbr"
 	"github.com/otbr-insight/otbr-insight/internal/otctl"
@@ -70,7 +71,10 @@ func main() {
 		}
 	}
 
-	monitor := service.NewMonitor(client, cfg.PollInterval, logger, service.WithDiscoveryInterval(cfg.DiscoveryInterval))
+	// Matter fabrics are discovered by browsing the LAN's mDNS. Any host can do
+	// this; it is not tied to the border router.
+	monitor := service.NewMonitor(client, cfg.PollInterval, logger,
+		service.WithDiscoveryInterval(cfg.DiscoveryInterval), service.WithServiceBrowser(mdns.Browser{}))
 
 	nameStore := names.New(cfg.DataDir)
 	if err := nameStore.Load(); err != nil {

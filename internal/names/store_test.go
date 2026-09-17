@@ -68,3 +68,27 @@ func TestStoreLoadMissingFileIsOK(t *testing.T) {
 		t.Errorf("Load() with missing file = %v", err)
 	}
 }
+
+func TestStoreKeepsFabricLabelsApartFromDevices(t *testing.T) {
+	s := New(t.TempDir())
+	// A fabric ID and an extended address can be the same sixteen digits.
+	if err := s.Set("1122334455667788", "Hallway plug"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set(FabricKey("1122334455667788"), "Home Assistant"); err != nil {
+		t.Fatal(err)
+	}
+	labels := s.Snapshot()
+	if labels["1122334455667788"] != "Hallway plug" || labels["fabric:1122334455667788"] != "Home Assistant" {
+		t.Fatalf("labels = %v", labels)
+	}
+	if err := s.Set(FabricKey("not-hex"), "x"); err == nil {
+		t.Error("a malformed fabric id was accepted")
+	}
+	if err := s.Delete(FabricKey("1122334455667788")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Snapshot()["fabric:1122334455667788"]; ok {
+		t.Error("fabric label survived Delete")
+	}
+}

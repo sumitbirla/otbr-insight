@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/otbr-insight/otbr-insight/internal/matter"
+	"github.com/otbr-insight/otbr-insight/internal/mdns"
 	"github.com/otbr-insight/otbr-insight/internal/model"
 )
 
@@ -53,6 +55,9 @@ type Monitor struct {
 	discoverEvery      time.Duration
 	discoveryOff       bool
 	discoveryUnhealthy bool
+
+	browser ServiceBrowser
+	signals *signalTrail
 }
 
 // MonitorOption tunes a Monitor at construction.
@@ -73,6 +78,7 @@ func NewMonitor(provider ThreadProvider, pollEvery time.Duration, logger *slog.L
 		overview: model.Overview{Status: "connecting", APIHealth: "unknown", Stale: true},
 		devices:  model.DeviceInventory{Status: "connecting", Items: []model.Device{}, Source: "detecting"},
 		topology: model.Topology{Status: "connecting", Nodes: []model.TopologyNode{}, Links: []model.TopologyLink{}, Source: "detecting"},
+		signals:  newSignalTrail(),
 	}
 	for _, opt := range opts {
 		opt(monitor)
@@ -306,6 +312,15 @@ func (m *Monitor) refreshDevices(ctx context.Context) {
 		inventory.Status = "partial"
 	}
 	m.devices = *inventory
+	// Sampled here rather than on read, so the trail reflects the poll cadence
+	// and not how often somebody opens a device.
+	m.signals.Record(inventory.Items, now)
+}
+
+// SignalHistory returns the recent radio-link trail for one device, keyed by
+// extended address. Empty for a device not seen since this process started.
+func (m *Monitor) SignalHistory(ext string) model.SignalHistory {
+	return m.signals.History(ext)
 }
 
 func (m *Monitor) refreshTopology(ctx context.Context) {
@@ -420,4 +435,40 @@ func capabilitiesChanged(a, b model.Capabilities) bool {
 		}
 	}
 	return false
+}
+
+// ServiceBrowser lists the instances of an mDNS service on the LAN; satisfied by
+// mdns.Browser. Optional: without one the Monitor reports fabric discovery as
+// unsupported rather than failing.
+type ServiceBrowser interface {
+	Browse(ctx context.Context, service string) ([]mdns.Instance, error)
+}
+
+// WithServiceBrowser enables Matter fabric discovery over mDNS.
+func WithServiceBrowser(browser ServiceBrowser) MonitorOption {
+	return func(m *Monitor) { m.browser = browser }
+}
+
+// MatterFabrics browses the LAN for Matter operational nodes and groups them by
+// fabric, marking the ones that are devices on this mesh. On demand, a few
+// seconds, no radio cost: mDNS is LAN traffic, and Thread devices are answered
+// for by the border router's advertising proxy.
+func (m *Monitor) MatterFabrics(ctx context.Context) (*model.FabricScan, error) {
+	started := time.Now()
+	scan := &model.FabricScan{Status: "available", Fabrics: []model.MatterFabric{}, Source: "mDNS browse", ScannedAt: started.UTC()}
+	if m.browser == nil {
+		scan.Status = "unsupported"
+		scan.Error = "mDNS browsing is not enabled on this server."
+		return scan, nil
+	}
+	instances, err := m.browser.Browse(ctx, matter.OperationalService)
+	scan.DurationMs = time.Since(started).Milliseconds()
+	if err != nil && len(instances) == 0 {
+		return nil, err
+	}
+	scan.Fabrics = matter.Fabrics(instances, m.DeviceSnapshot().Items)
+	for _, fabric := range scan.Fabrics {
+		scan.NodeCount += fabric.NodeCount
+	}
+	return scan, nil
 }

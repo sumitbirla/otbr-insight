@@ -298,7 +298,7 @@ h1 { margin: 5px 0 0; font-size: 1.5rem; letter-spacing: -.02em; }
 .device-expanded.open { display: grid; }
 .device-expanded div { min-width: 0; }
 .device-expanded span { display: block; margin-bottom: 6px; color: var(--faint); font-size: 0.6875rem; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
-.device-expanded strong { display: block; overflow-wrap: anywhere; color: var(--muted); font-size: 0.75rem; font-weight: 500; line-height: 1.5; }
+.device-expanded strong { display: block; overflow-wrap: anywhere; white-space: pre-line; color: var(--muted); font-size: 0.75rem; font-weight: 500; line-height: 1.5; }
 .inventory-empty { min-height: 188px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; }
 .inventory-empty strong { margin-top: 13px; font-size: 0.875rem; }.inventory-empty p { max-width: 360px; margin: 6px 0 0; color: var(--muted); font-size: 0.75rem; line-height: 1.5; }
 .loading-ring { width: 25px; height: 25px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
@@ -320,6 +320,14 @@ h1 { margin: 5px 0 0; font-size: 1.5rem; letter-spacing: -.02em; }
 .network-card-header > span:nth-child(2) { min-width: 0; }
 .network-card-header strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.875rem; }
 .network-card-header small { display: block; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 0.6875rem; }
+.fabric-nodes { margin: 0; padding: 0 15px 12px; list-style: none; }
+.fabric-nodes li { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line-soft); font-size: 0.75rem; color: var(--muted); }
+.fabric-nodes li:first-child { border-top: 0; }
+.fabric-nodes li.on-mesh { color: var(--text); }
+.fabric-nodes li > code { flex: none; font: 0.6875rem "SFMono-Regular", Consolas, monospace; color: var(--faint); }
+.fabric-nodes li > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fabric-nodes li > em { flex: none; margin-left: auto; padding: 2px 6px; border-radius: 20px; color: var(--accent); background: color-mix(in srgb, var(--accent), transparent 84%); font-size: 0.625rem; font-style: normal; font-weight: 750; letter-spacing: .06em; }
+.fabric-card-actions { display: flex; justify-content: flex-end; padding: 0 15px 14px; }
 .network-tag { display: inline-flex; width: fit-content; padding: 4px 7px; border-radius: 20px; color: var(--muted); background: var(--surface-2); font-size: 0.6875rem; font-weight: 750; letter-spacing: .06em; }
 .network-tag.current { color: var(--accent); background: color-mix(in srgb, var(--accent), transparent 84%); }
 .network-card-facts { display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); background: color-mix(in srgb, var(--surface-2), transparent 30%); }
@@ -367,6 +375,22 @@ h1 { margin: 5px 0 0; font-size: 1.5rem; letter-spacing: -.02em; }
 .topology-node-top > span { display: flex; align-items: center; gap: 4px; }
 .topology-node-top em { padding: 2px 4px; border-radius: 3px; color: var(--leader); background: var(--leader-soft); font-size: 0.625rem; font-style: normal; font-weight: 850; letter-spacing: .08em; }
 .topology-node-top em.local { color: var(--accent); background: var(--accent-soft); }
+/* Pairing is transient and worth spotting from across the map, so it takes the
+   warning colour rather than the leader/local blues. */
+.signal-block { display: block; }
+.signal-chart { display: block; width: 100%; height: 46px; margin: 2px 0 5px; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--surface-2); }
+.signal-grid { stroke: var(--line-soft); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.signal-gap { fill: color-mix(in srgb, var(--warning), transparent 90%); }
+.signal-band { fill: color-mix(in srgb, var(--accent), transparent 78%); }
+.signal-line { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.signal-dot { fill: var(--accent); }
+.signal-caption, .signal-empty { display: block; color: var(--muted); font-size: 0.6875rem; line-height: 1.45; }
+.device-signal-detail { grid-column: 1 / -1; }
+.device-signal-detail > span { display: block; margin-bottom: 4px; color: var(--faint); font-size: 0.625rem; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+.pairing-badge { flex: none; padding: 2px 5px; border-radius: 3px; color: var(--warning); background: color-mix(in srgb, var(--warning), transparent 86%); font-size: 0.625rem; font-style: normal; font-weight: 850; letter-spacing: .08em; white-space: nowrap; }
+.topology-node-top em.pairing-badge { color: var(--warning); background: color-mix(in srgb, var(--warning), transparent 86%); }
+.device-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.device-name-row b { min-width: 0; }
 .topology-node > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; font-weight: 650; }
 /* A strained link is flagged identically on the map card and in both detail views;
    one class so the two can never disagree about what "high" looks like. */
@@ -374,9 +398,7 @@ h1 { margin: 5px 0 0; font-size: 1.5rem; letter-spacing: -.02em; }
 .topology-node > small.topology-node-metrics.link-strained { color: var(--warning); }
 .topology-inspector-list dd.link-strained { color: var(--warning); }
 .device-expanded strong.link-strained { color: var(--warning); }
-.channel-head { margin-top: 26px; align-items: center; }
-.channel-head h2 { margin: 0; }
-.channel-actions { width: auto; }
+.scan-actions { width: auto; }
 .channel-panel { padding: 18px 20px 14px; overflow: visible; }
 .channel-panel .inventory-note { margin-bottom: 20px; }
 .channel-chart { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 6px; align-items: end; }
@@ -410,7 +432,7 @@ h1 { margin: 5px 0 0; font-size: 1.5rem; letter-spacing: -.02em; }
 .topology-inspector-list > div { display: grid; gap: 4px; padding: 9px 0; border-top: 1px solid var(--line-soft); }
 .topology-inspector-list > div:first-child { border-top: 0; }
 .topology-inspector-list dt { color: var(--faint); font-size: 0.6875rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
-.topology-inspector-list dd { margin: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font: 0.75rem/1.45 "SFMono-Regular", Consolas, monospace; }
+.topology-inspector-list dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre-line; color: var(--muted); font: 0.75rem/1.45 "SFMono-Regular", Consolas, monospace; }
 .rename-button { flex: none; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface-2); cursor: pointer; font-size: 0.6875rem; font-weight: 650; }
 .rename-button:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent), var(--line) 45%); }
 .rename-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

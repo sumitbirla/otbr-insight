@@ -2,6 +2,7 @@ package otctl
 
 import (
 	"context"
+	"github.com/otbr-insight/otbr-insight/internal/model"
 	"testing"
 	"time"
 )
@@ -48,6 +49,40 @@ const (
 		"    addresses: [fd11:2233:4455:1:dead:beef:dead:beef]\r\n" +
 		"Done\r\n"
 
+	// Captured from the same OTBR after commissioning into two controllers: one
+	// Matter operational record per fabric, a live commissioning advert, and a
+	// withdrawn one — which prints no host line, so it cannot be attributed.
+	realSRPServices = "" +
+		"1122334455667788-0000000000000014._matter._tcp.default.service.arpa.\r\n" +
+		"    deleted: false\r\n" +
+		"    subtypes: _I1122334455667788\r\n" +
+		"    port: 5540\r\n" +
+		"    priority: 0\r\n" +
+		"    weight: 0\r\n" +
+		"    ttl: 7200\r\n" +
+		"    lease: 7200\r\n" +
+		"    key-lease: 680400\r\n" +
+		"    remaining lease: 5562.703\r\n" +
+		"    remaining key-lease: 678762.703\r\n" +
+		"    TXT: [SII=3135383030, SAI=32353030, SAT=31303030, ICD=30]\r\n" +
+		"    host: 0102030405060708.default.service.arpa.\r\n" +
+		"    addresses: [fd11:2233:4455:1:f9b6:e8fa:35c7:8a25]\r\n" +
+		"8899AABBCCDDEEFF-00000000AABBCCDD._matter._tcp.default.service.arpa.\r\n" +
+		"    deleted: false\r\n" +
+		"    port: 5540\r\n" +
+		"    TXT: [SII=3135383030, SAI=32353030, SAT=31303030]\r\n" +
+		"    host: 0102030405060708.default.service.arpa.\r\n" +
+		"    addresses: [fd11:2233:4455:1:f9b6:e8fa:35c7:8a25]\r\n" +
+		"B6AC748E017B6659._matterc._udp.default.service.arpa.\r\n" +
+		"    deleted: true\r\n" +
+		"0F0E0D0C0B0A0908._matterc._udp.default.service.arpa.\r\n" +
+		"    deleted: false\r\n" +
+		"    port: 5540\r\n" +
+		"    TXT: [D=313233, CM=31]\r\n" +
+		"    host: 0102030405060708.default.service.arpa.\r\n" +
+		"    addresses: [fd11:2233:4455:1:f9b6:e8fa:35c7:8a25]\r\n" +
+		"Done\r\n"
+
 	// The local router (28) reports zeros about itself in its own router table.
 	realRouterTable = "" +
 		"| ID | RLOC16 | Next Hop | Path Cost | LQ In | LQ Out | Age | Extended MAC     | Link |\r\n" +
@@ -87,6 +122,7 @@ func meshClient(t *testing.T) *Client {
 		"meshdiag childip6 0x0800":   realRemoteChildIP6,
 		"br omrprefix":               realOMRPrefix,
 		"srp server host":            realSRPHosts,
+		"srp server service":         realSRPServices,
 		"router table":               realRouterTable,
 		"neighbor table":             realNeighborTable,
 	}), 3*time.Second)
@@ -288,6 +324,89 @@ func TestSRPRegistryIgnoresDeletedRegistrations(t *testing.T) {
 	}
 	if len(hosts["0102030405060708"]) != 1 {
 		t.Errorf("live registration = %v, want one address", hosts["0102030405060708"])
+	}
+}
+
+func TestSRPRegistryAttachesAdvertisedServices(t *testing.T) {
+	inventory, _, err := meshClient(t).Mesh(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var router *model.Device
+	for i := range inventory.Items {
+		if inventory.Items[i].ExtendedAddress == "0102030405060708" {
+			router = &inventory.Items[i]
+		}
+	}
+	if router == nil {
+		t.Fatal("remote router missing")
+	}
+	if router.Registration == nil || router.Registration.Lapsed {
+		t.Fatalf("registration = %+v, want live", router.Registration)
+	}
+	if router.Registration.LeaseSeconds == nil || *router.Registration.LeaseSeconds != 7200 {
+		t.Errorf("lease = %v, want 7200", router.Registration.LeaseSeconds)
+	}
+	if !router.Registration.Commissionable {
+		t.Error("a live _matterc._udp advert must flag the device as commissionable")
+	}
+	// Two operational records and the commissioning advert; the withdrawn one
+	// has no host and is dropped.
+	if len(router.Services) != 3 {
+		t.Fatalf("services = %+v, want 3", router.Services)
+	}
+	matter := router.Services[0]
+	if matter.Type != "_matter._tcp" || matter.FabricID != "1122334455667788" || matter.NodeID != "0x14" {
+		t.Errorf("first service = %+v, want Matter node 0x14 on fabric 1122334455667788", matter)
+	}
+	if matter.Port == nil || *matter.Port != 5540 {
+		t.Errorf("port = %v, want 5540", matter.Port)
+	}
+	// TXT values are hex on the wire and decimal strings underneath.
+	if matter.TXT["SII"] != "15800" || matter.TXT["ICD"] != "0" {
+		t.Errorf("TXT = %v, want decoded SII=15800 ICD=0", matter.TXT)
+	}
+	if router.Services[1].NodeID != "0xAABBCCDD" {
+		t.Errorf("second node = %q, want leading zeros trimmed", router.Services[1].NodeID)
+	}
+	// The commissioning advert has a random instance name, so it carries no Matter
+	// identity; its TXT is what the UI reads for the discriminator.
+	commissioning := router.Services[2]
+	if commissioning.Type != "_matterc._udp" || commissioning.FabricID != "" {
+		t.Errorf("commissioning advert = %+v, want no Matter identity", commissioning)
+	}
+	if commissioning.TXT["D"] != "123" || commissioning.TXT["CM"] != "1" {
+		t.Errorf("commissioning TXT = %v, want decoded D=123 CM=1", commissioning.TXT)
+	}
+	// The local router registers nothing with its own server.
+	for _, device := range inventory.Items {
+		if device.IsBorderRouter && device.Registration != nil {
+			t.Errorf("border router registration = %+v, want none", device.Registration)
+		}
+	}
+}
+
+func TestMeshCarriesThreadVersions(t *testing.T) {
+	inventory, _, err := meshClient(t).Mesh(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"1a2b3c4d5e6f7a8b": "5", "0102030405060708": "4", "0203040506070809": "5", "0405060708090a0b": "4"}
+	for _, device := range inventory.Items {
+		if got := device.ThreadVersion; got != want[device.ExtendedAddress] {
+			t.Errorf("%s version = %q, want %q", device.ExtendedAddress, got, want[device.ExtendedAddress])
+		}
+	}
+}
+
+func TestSRPRegistryKeepsLapsedHostsWithoutAddresses(t *testing.T) {
+	registry := meshClient(t).srpRegistry(context.Background())
+	lapsed := registry["aabbccddeeff0011"]
+	if lapsed == nil || !lapsed.Registration.Lapsed {
+		t.Fatalf("lapsed host = %+v, want kept and flagged", lapsed)
+	}
+	if len(lapsed.Addresses) != 0 {
+		t.Errorf("lapsed addresses = %v, want none", lapsed.Addresses)
 	}
 }
 
