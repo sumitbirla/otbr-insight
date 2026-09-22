@@ -4,7 +4,16 @@ OTBR Insight is a monitoring and management dashboard for an [OpenThread Border 
 
 It has **two modes**. Pointed at an OTBR over the network it uses the REST API alone and runs anywhere. Running **on the border router itself** it can additionally read OpenThread's daemon socket, which supplies live mesh data, nearby-network scanning, runtime radio details, event history, and reachability testing — none of which the REST API exposes. See [Data sources](#data-sources).
 
-It shows the Thread mesh as a map and a list, lets you name devices, scans for nearby Thread networks, and can form, join, enable, disable, leave, and restore the Thread network on the border router. It also serves a [Model Context Protocol](https://modelcontextprotocol.io) endpoint, so an AI assistant can read the same mesh data and help diagnose it — see [Assistant access (MCP)](#assistant-access-mcp).
+## Highlights
+
+- **A mesh you can read.** Routers drawn as clusters with their children beneath them, every card carrying signal strength and last-seen. Devices get names you assign once, and those names follow them into the list, the event log and the topology. Terms like RLOC16 and link margin are explained where they appear, because the vocabulary is the real barrier to understanding a Thread network.
+- **Answers when something breaks.** A two-hour signal trail per device that shows gaps, not just weak readings, so an intermittent link looks different from a steadily poor one. OpenThread's own event log covers time before the dashboard was running. Reachability testing reaches mesh-local addresses a browser cannot.
+- **A built-in MCP endpoint.** Twelve tools on the same port, so an assistant reads the same mesh data you do and helps diagnose it — shaped for reasoning rather than dumped as JSON, with no network writes and no credentials. See [Assistant access (MCP)](#assistant-access-mcp).
+- **A Home Assistant diagnostics decoder.** Drop in the export Home Assistant downloads per Matter device and get roughly 250 readings named and given their units: battery, reboots and boot reason, the device's own Thread counters, how it hears its parent, which controllers may administer it, certificates decoded rather than printed. It also names the Matter fabrics a browse can only observe as hashes. The file is decoded and discarded.
+- **Tools for the questions the UI cannot answer by watching.** Channel noise (ten seconds of energy sweeps, graded against the quietest channel with Wi-Fi overlap marked), nearby Thread networks, and Matter fabrics on the LAN.
+- **Network management, bounded.** Form, join, enable, disable, leave and restore — every destructive action behind a confirmation, credentials never on a polled read path.
+
+Full list under [Features](#features).
 
 ![The OTBR Insight mesh map: four Thread routers, each drawn as a cluster with its attached child devices beneath it](docs/mesh-map.png)
 
