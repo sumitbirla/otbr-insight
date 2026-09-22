@@ -22,16 +22,26 @@ import (
 func intPtr(v int) *int { return &v }
 
 type fakeData struct {
-	overview  model.Overview
-	inventory model.DeviceInventory
-	topology  model.Topology
-	scanErr   error
-	energy    *model.EnergyScan
-	fabrics   *model.FabricScan
-	signal    model.SignalHistory
+	overview     model.Overview
+	inventory    model.DeviceInventory
+	topology     model.Topology
+	scanErr      error
+	energy       *model.EnergyScan
+	fabrics      *model.FabricScan
+	signal       model.SignalHistory
+	capabilities model.Capabilities
 }
 
 func (f *fakeData) SignalHistory(string) model.SignalHistory { return f.signal }
+
+func (f *fakeData) CapabilitySnapshot() model.Capabilities { return f.capabilities }
+
+// fakeBackups reports a saved dataset without ever exposing its TLV.
+type fakeBackups struct{}
+
+func (fakeBackups) BackupMeta() (bool, string, time.Time) {
+	return true, "Old network", time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+}
 
 func (f *fakeData) MatterFabrics(context.Context) (*model.FabricScan, error) {
 	if f.fabrics == nil {
@@ -61,6 +71,10 @@ type fakeLabels map[string]string
 
 func (f fakeLabels) Snapshot() map[string]string { return f }
 
+func (f fakeLabels) Set(key, name string) error { f[key] = name; return nil }
+
+func (f fakeLabels) Delete(key string) error { delete(f, key); return nil }
+
 // fakeProvider implements ping and history; a provider without them is plain struct{}.
 type fakeProvider struct {
 	pinged  []string
@@ -70,6 +84,12 @@ type fakeProvider struct {
 func (f *fakeProvider) Ping(_ context.Context, address string, count int) (*model.PingResult, error) {
 	f.pinged = append(f.pinged, address)
 	return &model.PingResult{Address: address, Reachable: true, Sent: count, Received: count}, nil
+}
+
+func (f *fakeProvider) NetworkConfig(context.Context) (*model.NetworkConfig, error) {
+	return &model.NetworkConfig{State: "leader", Dataset: model.Dataset{
+		Present: true, NetworkName: "Test network", HasNetworkKey: true,
+	}}, nil
 }
 
 func (f *fakeProvider) History(context.Context) (*model.History, error) {
@@ -116,7 +136,7 @@ func fixture(now time.Time) *fakeData {
 
 func connect(t *testing.T, data *fakeData, labels fakeLabels, provider any) *mcp.ClientSession {
 	t.Helper()
-	srv := httptest.NewServer(Handler(data, labels, provider, nil))
+	srv := httptest.NewServer(Handler(data, labels, provider, fakeBackups{}, nil))
 	t.Cleanup(srv.Close)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: srv.URL, DisableStandaloneSSE: true}, nil)
@@ -159,11 +179,11 @@ func TestToolsRegisteredByCapability(t *testing.T) {
 		return out
 	}
 	full := names(connect(t, fixture(time.Now()), fakeLabels{}, &fakeProvider{}))
-	if got := strings.Join(full, ","); got != "get_history,get_network,get_signal_history,get_topology,list_devices,list_fabrics,ping_device,scan_channels,scan_networks" {
+	if got := strings.Join(full, ","); got != "get_capabilities,get_history,get_network,get_signal_history,get_topology,list_devices,list_fabrics,ping_device,scan_channels,scan_networks,set_device_name,set_fabric_name" {
 		t.Fatalf("tools with socket provider: %s", got)
 	}
 	restOnly := names(connect(t, fixture(time.Now()), fakeLabels{}, struct{}{}))
-	if got := strings.Join(restOnly, ","); got != "get_network,get_signal_history,get_topology,list_devices,list_fabrics,scan_channels,scan_networks" {
+	if got := strings.Join(restOnly, ","); got != "get_capabilities,get_network,get_signal_history,get_topology,list_devices,list_fabrics,scan_channels,scan_networks,set_device_name,set_fabric_name" {
 		t.Fatalf("tools without socket provider: %s", got)
 	}
 }
@@ -430,6 +450,92 @@ func TestGetSignalHistoryReportsAnEmptyTrailPlainly(t *testing.T) {
 	call(t, session, "get_signal_history", map[string]any{"device": "1112131415161718"}, &out)
 	if len(out.Series) != 0 || out.Note == "" {
 		t.Fatalf("empty trail = %+v, want no series and an explanation", out)
+	}
+}
+
+func TestGetCapabilitiesAndDatasetReachTheOrientationCall(t *testing.T) {
+	data := connectFixture(t)
+	data.capabilities = model.Capabilities{Items: []model.Capability{
+		{Name: "diagnostics", Endpoint: "/api/diagnostics", Supported: true, StatusCode: 200},
+		{Name: "energy scan", Endpoint: "/api/actions", Supported: false, StatusCode: 404},
+	}}
+	session := connect(t, data, fakeLabels{}, &fakeProvider{})
+
+	var caps model.Capabilities
+	call(t, session, "get_capabilities", nil, &caps)
+	if len(caps.Items) != 2 || caps.Items[1].Supported || caps.Items[1].StatusCode != 404 {
+		t.Fatalf("capabilities = %+v", caps.Items)
+	}
+
+	var out networkSummary
+	call(t, session, "get_network", nil, &out)
+	if out.Dataset == nil || !out.Dataset.Present || !out.Dataset.HasNetworkKey || out.Dataset.HasPSKc {
+		t.Fatalf("dataset = %+v, want present with a key and no PSKc", out.Dataset)
+	}
+	if out.Dataset.InterfaceState != "leader" {
+		t.Errorf("interfaceState = %q", out.Dataset.InterfaceState)
+	}
+	if out.Backup == nil || out.Backup.NetworkName != "Old network" {
+		t.Fatalf("backup = %+v", out.Backup)
+	}
+}
+
+func TestSetDeviceNameWritesAndClears(t *testing.T) {
+	labels := fakeLabels{"2122232425262728": "Kitchen sensor"}
+	session := connect(t, connectFixture(t), labels, struct{}{})
+
+	// Resolvable by the existing label, and the write lands on the extended address.
+	var out nameChange
+	call(t, session, "set_device_name", map[string]any{"device": "Kitchen sensor", "name": "  Pantry sensor  "}, &out)
+	if out.PreviousName != "Kitchen sensor" || out.Name != "Pantry sensor" || out.Cleared {
+		t.Fatalf("change = %+v", out)
+	}
+	if labels["2122232425262728"] != "Pantry sensor" {
+		t.Fatalf("store = %v", labels)
+	}
+
+	// An empty name clears rather than erroring: it is how a wrong label is undone.
+	// A fresh struct, because the cleared response omits the name rather than
+	// sending an empty one, and a reused one would keep the old value.
+	var cleared nameChange
+	call(t, session, "set_device_name", map[string]any{"device": "2122232425262728", "name": ""}, &cleared)
+	if !cleared.Cleared || cleared.Name != "" {
+		t.Fatalf("clear = %+v", cleared)
+	}
+	if _, present := labels["2122232425262728"]; present {
+		t.Fatalf("label survived the clear: %v", labels)
+	}
+}
+
+func TestSetDeviceNameRejectsAnUnknownDevice(t *testing.T) {
+	session := connect(t, connectFixture(t), fakeLabels{}, struct{}{})
+	if result := call(t, session, "set_device_name", map[string]any{"device": "no such thing", "name": "x"}, nil); !result.IsError {
+		t.Fatal("naming an unknown device should fail rather than write a stray label")
+	}
+}
+
+func TestSetFabricNameUsesTheFabricPrefixAndValidatesTheID(t *testing.T) {
+	labels := fakeLabels{}
+	session := connect(t, connectFixture(t), labels, struct{}{})
+
+	var out nameChange
+	call(t, session, "set_fabric_name", map[string]any{"fabric": "1122334455667788", "name": "Home Assistant"}, &out)
+	if out.Name != "Home Assistant" || out.FabricID != "1122334455667788" {
+		t.Fatalf("change = %+v", out)
+	}
+	// The prefix is what stops a fabric ID colliding with an extended address.
+	if labels["fabric:1122334455667788"] != "Home Assistant" {
+		t.Fatalf("store = %v", labels)
+	}
+	if _, collided := labels["1122334455667788"]; collided {
+		t.Fatalf("fabric label written as a device label: %v", labels)
+	}
+
+	if result := call(t, session, "set_fabric_name", map[string]any{"fabric": "2C49", "name": "x"}, nil); !result.IsError {
+		t.Fatal("a short fabric id should be rejected rather than stored")
+	}
+	if len(labels) != 1 {
+		t.Fatalf("a rejected id must write nothing: %v", labels)
 	}
 }
 

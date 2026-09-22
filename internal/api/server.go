@@ -189,7 +189,7 @@ func Handler(data Snapshotter, names NameStore, control NetworkController, backu
 	})
 	// MCP endpoint for assistants, on the same listener and under the same
 	// trust model as the REST API. Read-only plus ping; see internal/mcpserver.
-	mux.Handle("/mcp", mcpserver.Handler(data, names, control, logger))
+	mux.Handle("/mcp", mcpserver.Handler(data, names, control, backupMeta{backups}, logger))
 	mux.Handle("/", frontend)
 	return securityHeaders(requestLog(rejectCrossSite(mux), logger))
 }
@@ -512,6 +512,15 @@ func handleSetName(w http.ResponseWriter, r *http.Request, names NameStore, logg
 	}
 	logger.Info("device name set", "extendedAddress", ext)
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"extendedAddress": ext, "name": strings.TrimSpace(body.Name)}})
+}
+
+// backupMeta adapts the backup store to the plain signature the MCP server asks
+// for, so that package keeps importing neither internal/api nor internal/backup.
+type backupMeta struct{ store BackupStore }
+
+func (b backupMeta) BackupMeta() (bool, string, time.Time) {
+	meta := b.store.Meta()
+	return meta.Present, meta.NetworkName, meta.SavedAt
 }
 
 func writeNameError(w http.ResponseWriter, err error) {

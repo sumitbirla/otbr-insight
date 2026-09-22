@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -47,6 +48,15 @@ type Labels interface {
 	Snapshot() map[string]string
 }
 
+// LabelWriter persists user labels. Optional: a server whose name store has no
+// data directory still registers the naming tools, and they answer with the
+// store's own "naming is disabled" message rather than vanishing — the same way
+// the socket-backed tools behave without a socket.
+type LabelWriter interface {
+	Set(key, name string) error
+	Delete(key string) error
+}
+
 // Pinger tests reachability from the border router; optional.
 type Pinger interface {
 	Ping(ctx context.Context, address string, count int) (*model.PingResult, error)
@@ -71,6 +81,24 @@ type EnergyScanner interface {
 	EnergyScan(ctx context.Context) (*model.EnergyScan, error)
 }
 
+// CapabilityReporter serves the endpoint-support probe; optional, satisfied by
+// service.Monitor.
+type CapabilityReporter interface {
+	CapabilitySnapshot() model.Capabilities
+}
+
+// DatasetReporter reads the interface state and the credential-masked active
+// dataset; optional, satisfied by otbr.Client.
+type DatasetReporter interface {
+	NetworkConfig(ctx context.Context) (*model.NetworkConfig, error)
+}
+
+// BackupReporter describes the saved dataset without exposing it. The TLV is
+// deliberately not reachable from here: it carries the network key.
+type BackupReporter interface {
+	BackupMeta() (present bool, networkName string, savedAt time.Time)
+}
+
 // SignalTrails serves each device's recent radio-link history; optional,
 // satisfied by service.Monitor.
 type SignalTrails interface {
@@ -90,13 +118,17 @@ type server struct {
 	energy  EnergyScanner
 	fabrics FabricBrowser
 	trails  SignalTrails
+	writer  LabelWriter
+	caps    CapabilityReporter
+	dataset DatasetReporter
+	backups BackupReporter
 	logger  *slog.Logger
 }
 
 // Handler returns the Streamable HTTP MCP endpoint. provider is the OTBR
 // client; the ping and history tools are registered only when it implements
 // them, which mirrors how the REST routes appear.
-func Handler(data Snapshots, labels Labels, provider any, logger *slog.Logger) http.Handler {
+func Handler(data Snapshots, labels Labels, provider any, backups any, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -106,6 +138,10 @@ func Handler(data Snapshots, labels Labels, provider any, logger *slog.Logger) h
 	s.energy, _ = data.(EnergyScanner)
 	s.fabrics, _ = data.(FabricBrowser)
 	s.trails, _ = data.(SignalTrails)
+	s.writer, _ = labels.(LabelWriter)
+	s.caps, _ = data.(CapabilityReporter)
+	s.dataset, _ = provider.(DatasetReporter)
+	s.backups, _ = backups.(BackupReporter)
 
 	// The SDK logs every session at INFO, and in stateless mode every request is
 	// a session, so it only gets to speak up about problems.
@@ -132,12 +168,12 @@ func Handler(data Snapshots, labels Labels, provider any, logger *slog.Logger) h
 }
 
 const instructions = `OTBR Insight monitors a Thread mesh through its OpenThread Border Router (OTBR).
-Start with get_network for orientation; it includes device counts so you can decide whether list_devices is worth calling.
+Start with get_network for orientation; it includes device counts so you can decide whether list_devices is worth calling, plus whether the Thread dataset is configured and whether a restore point exists.
 Devices are identified by name (the user's label when one is set) and joined by extended address, a 16-hex-digit hardware identifier. RLOC16s change when a device roams; extended addresses do not.
 Signal: RSSI below about -85 dBm is weak; link quality is 0-3 where 3 is best. Error rates are fractions over roughly the last 64 transmissions, so a high rate with a strong RSSI points at interference rather than range.
 Sleepy end devices are battery powered and only wake to poll their parent; a ping to one can take several seconds and "last seen" of a minute or two is normal.
 Each device's "services" are what it registered with the border router's SRP server, which is how Thread devices become visible to controllers on the LAN. A Matter device carries one _matter._tcp service per fabric (controller) it is commissioned into, with the fabric and node ID; a _matterc._udp service means it is in pairing mode right now. A device on the mesh with no registration, or a lapsed one, is the usual cause of "joined Thread but the app cannot find it".
-These tools are read-only apart from ping_device, which makes the border router transmit but changes nothing. Network changes (form, join, leave) are not available here by design.`
+These tools only read, with two exceptions that change nothing on the radio or in the Thread network: ping_device makes the border router transmit, and set_device_name / set_fabric_name store a label in the dashboard's own file. Network changes (form, join, leave) and Thread credentials are not available here by design.`
 
 func buildVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
@@ -183,6 +219,25 @@ func (s *server) register(m *mcp.Server) {
 			Description: "Browse the LAN over mDNS for Matter operational nodes and group them by fabric (one per controller such as Home Assistant, Apple Home or Google Home). Each fabric lists its nodes with node ID, hostname, port and addresses, and flags which are devices on this Thread mesh (by name when labelled). A fabric carries the user's label as its name when one has been set; otherwise tell controllers apart by node numbering (Home Assistant counts up from 1) or by a node on a non-5540 port, which is a controller's own advert. Works even when the mesh is empty, since Wi-Fi Matter devices and hubs advertise too. Takes about three seconds.",
 			Annotations: readOnly("List Matter fabrics"),
 		}, s.listFabrics)
+	}
+	if s.writer != nil {
+		mcp.AddTool(m, &mcp.Tool{
+			Name:        "set_device_name",
+			Description: "Give a device a name, or clear it by passing an empty name. The label is stored locally by the dashboard and shown everywhere the device appears; it changes nothing on the radio or in the Thread network. Use it after working out what an unnamed device actually is.",
+			Annotations: &mcp.ToolAnnotations{Title: "Name a device", ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)},
+		}, s.setDeviceName)
+		mcp.AddTool(m, &mcp.Tool{
+			Name:        "set_fabric_name",
+			Description: "Give a Matter fabric a name, such as the controller that owns it, or clear it by passing an empty name. Takes the 16-hex compressed fabric ID from list_fabrics. Stored locally by the dashboard; it changes nothing in Matter.",
+			Annotations: &mcp.ToolAnnotations{Title: "Name a Matter fabric", ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)},
+		}, s.setFabricName)
+	}
+	if s.caps != nil {
+		mcp.AddTool(m, &mcp.Tool{
+			Name:        "get_capabilities",
+			Description: "Which optional OTBR endpoints this border router's firmware actually supports, each with the status code and latency of the last probe. Use it when something reports itself unavailable, to tell a missing firmware feature from a transient failure.",
+			Annotations: readOnly("OTBR capabilities"),
+		}, s.getCapabilities)
 	}
 	if s.trails != nil {
 		mcp.AddTool(m, &mcp.Tool{
@@ -245,13 +300,35 @@ type networkSummary struct {
 	LeaderRouterID        *int                `json:"leaderRouterId,omitempty"`
 	RouterCount           *int                `json:"routerCount,omitempty"`
 	BorderRouter          borderRouterSummary `json:"borderRouter"`
+	Dataset               *datasetSummary     `json:"dataset,omitempty"`
+	Backup                *backupSummary      `json:"backup,omitempty"`
 	Devices               deviceCounts        `json:"devices"`
 	LastSuccessfulRefresh *time.Time          `json:"lastSuccessfulRefresh,omitempty"`
 	Error                 string              `json:"error,omitempty"`
 	Note                  string              `json:"note,omitempty"`
 }
 
-func (s *server) getNetwork(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, networkSummary, error) {
+// datasetSummary carries only what the overview does not already say. The
+// network name, channel and PAN ID are at the top level, so repeating them here
+// would invite a reader to wonder which copy is authoritative.
+type datasetSummary struct {
+	Present         bool   `json:"present"`
+	InterfaceState  string `json:"interfaceState,omitempty"`
+	ActiveTimestamp *int64 `json:"activeTimestamp,omitempty"`
+	HasNetworkKey   bool   `json:"hasNetworkKey"`
+	HasPSKc         bool   `json:"hasPskc"`
+}
+
+type backupSummary struct {
+	NetworkName string    `json:"networkName,omitempty"`
+	SavedAt     time.Time `json:"savedAt"`
+}
+
+func (s *server) getCapabilities(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, model.Capabilities, error) {
+	return nil, s.caps.CapabilitySnapshot(), nil
+}
+
+func (s *server) getNetwork(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, networkSummary, error) {
 	overview := s.data.Snapshot()
 	inventory := s.data.DeviceSnapshot()
 	labels := s.labels.Snapshot()
@@ -284,6 +361,22 @@ func (s *server) getNetwork(context.Context, *mcp.CallToolRequest, struct{}) (*m
 			OpenThreadVersion: overview.OpenThreadVersion, RCPVersion: overview.RCPVersion, TxPower: overview.RCPTxPower,
 		},
 		Devices: counts, LastSuccessfulRefresh: overview.LastSuccessfulRefresh, Error: overview.Error,
+	}
+	// Best effort: a dataset read that fails leaves the field absent rather than
+	// failing the orientation call every other tool depends on.
+	if s.dataset != nil {
+		if config, err := s.dataset.NetworkConfig(ctx); err == nil && config != nil {
+			summary.Dataset = &datasetSummary{
+				Present: config.Dataset.Present, InterfaceState: config.State,
+				ActiveTimestamp: config.Dataset.ActiveTimestamp,
+				HasNetworkKey:   config.Dataset.HasNetworkKey, HasPSKc: config.Dataset.HasPSKc,
+			}
+		}
+	}
+	if s.backups != nil {
+		if present, name, savedAt := s.backups.BackupMeta(); present {
+			summary.Backup = &backupSummary{NetworkName: name, SavedAt: savedAt}
+		}
 	}
 	switch {
 	case overview.Status == "offline" && !overview.HasData:
@@ -536,6 +629,87 @@ func routerRank(c *routerCluster) int {
 	default:
 		return 2
 	}
+}
+
+// --- set_device_name / set_fabric_name --------------------------------------
+
+type setDeviceNameInput struct {
+	Device string `json:"device" jsonschema:"Device name, extended address or RLOC16."`
+	Name   string `json:"name" jsonschema:"The new name. An empty string clears the existing one."`
+}
+
+type setFabricNameInput struct {
+	Fabric string `json:"fabric" jsonschema:"The 16-hex compressed fabric ID, as list_fabrics reports it."`
+	Name   string `json:"name" jsonschema:"The new name. An empty string clears the existing one."`
+}
+
+type nameChange struct {
+	Target          string `json:"target"`
+	ExtendedAddress string `json:"extendedAddress,omitempty"`
+	FabricID        string `json:"fabricId,omitempty"`
+	PreviousName    string `json:"previousName,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Cleared         bool   `json:"cleared,omitempty"`
+}
+
+// writeLabel stores or clears one label and reports what changed. An empty name
+// is a deletion rather than an error: clearing is how a wrong label is undone,
+// and the store treats the two the same way.
+func (s *server) writeLabel(key, previous, name string) (nameChange, error) {
+	change := nameChange{PreviousName: previous}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		if err := s.writer.Delete(key); err != nil {
+			return change, err
+		}
+		change.Cleared = true
+		return change, nil
+	}
+	if err := s.writer.Set(key, name); err != nil {
+		return change, err
+	}
+	change.Name = name
+	return change, nil
+}
+
+func (s *server) setDeviceName(_ context.Context, _ *mcp.CallToolRequest, in setDeviceNameInput) (*mcp.CallToolResult, nameChange, error) {
+	target := strings.TrimSpace(in.Device)
+	if target == "" {
+		return nil, nameChange{}, errors.New("device is required")
+	}
+	labels := s.labels.Snapshot()
+	device := s.resolveDevice(strings.ToLower(target), labels)
+	if device == nil {
+		return nil, nameChange{}, fmt.Errorf("no device matches %q; use list_devices to see names and addresses", target)
+	}
+	// The same key the dashboard writes: the extended address where there is one,
+	// otherwise whatever identifies the device at all.
+	key := device.ExtendedAddress
+	if key == "" {
+		key = device.ID
+	}
+	change, err := s.writeLabel(key, labelFor(labels, device.ExtendedAddress, device.ID), in.Name)
+	if err != nil {
+		return nil, nameChange{}, err
+	}
+	change.Target, change.ExtendedAddress = displayName(labels, *device), device.ExtendedAddress
+	return nil, change, nil
+}
+
+var fabricIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{16}$`)
+
+func (s *server) setFabricName(_ context.Context, _ *mcp.CallToolRequest, in setFabricNameInput) (*mcp.CallToolResult, nameChange, error) {
+	fabric := strings.TrimSpace(in.Fabric)
+	if !fabricIDPattern.MatchString(fabric) {
+		return nil, nameChange{}, fmt.Errorf("fabric must be a 16-hex compressed fabric ID as list_fabrics reports it, got %q", in.Fabric)
+	}
+	key := names.FabricKey(fabric)
+	change, err := s.writeLabel(key, s.labels.Snapshot()[key], in.Name)
+	if err != nil {
+		return nil, nameChange{}, err
+	}
+	change.Target, change.FabricID = strings.ToUpper(fabric), strings.ToUpper(fabric)
+	return nil, change, nil
 }
 
 // --- get_signal_history ----------------------------------------------------

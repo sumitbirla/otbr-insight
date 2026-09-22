@@ -62,9 +62,9 @@ Every destructive action is confirmed in a dialog before it is sent.
 **Assistant access** (MCP)
 
 - Built-in Model Context Protocol server at `/mcp`, no extra process or configuration
-- Nine tools covering the network summary, device list, topology, event history, signal history, reachability testing, nearby-network scan, channel noise and Matter fabrics
+- Twelve tools covering the network summary, device list, topology, event history, signal history, reachability testing, nearby-network scan, channel noise, Matter fabrics, firmware capabilities, and naming devices and fabrics
 - Results shaped for a language model: device names instead of hex, parents by name, ages in seconds, topology nested by router
-- Read-only by design — no network writes and no credentials over MCP
+- No network writes and no credentials over MCP. The only writes are a device or fabric label, stored in the dashboard's own file
 
 ## Security model
 
@@ -267,17 +267,20 @@ No token or header is required. The client must be on the same LAN as the dashbo
 
 | Tool | Arguments | Returns | Needs |
 | --- | --- | --- | --- |
-| `get_network` | — | Network name, channel, PAN ID, extended PAN ID and mesh-local prefix; the border router's role, state, RLOC16, addresses and firmware versions; leader, partition and router count; and **device counts** — total, routers, end devices, unnamed, and any device not heard from in ten minutes, by name. It does **not** include the device list, so it stays cheap to call first | REST |
+| `get_network` | — | Network name, channel, PAN ID, extended PAN ID and mesh-local prefix; the border router's role, state, RLOC16, addresses and firmware versions; leader, partition and router count; whether the Thread dataset is configured and whether a restore point exists; and **device counts** — total, routers, end devices, unnamed, and any device not heard from in ten minutes, by name. It does **not** include the device list, so it stays cheap to call first | REST |
 | `list_devices` | `role` (`router` or `end-device`), `query` (substring of name, extended address or RLOC16) | One entry per device: name, extended address, role, parent **by name**, seconds since last heard, RSSI, link quality (0–3), link margin, frame and message error rates, mesh-local and OMR addresses, Thread version, and what it registered with SRP: registration status and its Matter services with fabric and node ID | REST; live data with the socket |
 | `get_topology` | — | Each router with the children attached to it, ordered border router first, then the leader; router-to-router links with link quality in/out, path cost and RSSI; and a separate list of children whose parent could not be resolved | REST; live data with the socket |
 | `get_history` | `device` (name, extended address or RLOC16), `limit` (default 30) | OpenThread's own event log, newest first, with each entry's age in seconds: role and partition changes for the border router, and devices attaching or detaching with the signal at the time | Daemon socket |
 | `ping_device` | `device` (name, extended address, RLOC16 or IPv6 address), `count` (1–10, default 3) | Sent and received counts and min/average/max round trip, plus which address was used. Prefers the mesh-local address, which survives roaming | Daemon socket |
 | `scan_networks` | — | Other Thread networks on the air: name, extended PAN ID, PAN ID, channel and the beaconing device's address | Socket or `otbr-web` |
+| `set_device_name` | `device`, `name` (empty clears) | Stores a local label for a device, shown everywhere it appears; changes nothing on the radio | Local name file |
+| `set_fabric_name` | `fabric` (16-hex compressed fabric ID), `name` (empty clears) | Stores a local label for a Matter fabric, such as the controller that owns it | Local name file |
+| `get_capabilities` | — | Which optional OTBR endpoints this firmware supports, with the status code and latency of the last probe, to tell a missing feature from a transient failure | REST |
 | `get_signal_history` | `device` (name, extended address or RLOC16) | Mean, best and worst RSSI over the last couple of hours, the share of the window the device was present, and a series of at most 24 points so a trend or a dip is visible | In-memory trail |
 | `scan_channels` | — | About ten seconds of sweeps: loudest and typical signal per channel, each graded quiet, moderate or busy against the quietest, its Wi-Fi overlap, the three quietest channels, and a one-sentence assessment of the current channel | Socket or REST |
 | `list_fabrics` | — | Matter fabrics with nodes on the LAN, one entry per controller: node IDs, hostnames, ports and addresses, with the nodes on this mesh named and flagged. About three seconds | mDNS on the LAN, plus the SRP registry with the socket |
 
-All nine tools are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
+All twelve tools are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
 
 A device can be named any way the dashboard shows it. `ping_device` with `"kitchen sensor"` matches the label you gave it (case-insensitively, and by unique substring), `"0x0401"` matches an RLOC16, and a bare IPv6 address is used as given. When no device matches, the error says so and points at `list_devices`.
 
