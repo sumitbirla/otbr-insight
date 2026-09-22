@@ -245,6 +245,90 @@ type MatterFabric struct {
 	Nodes      []MatterNode `json:"nodes"`
 }
 
+// FabricEvidence is what one Matter controller's diagnostics export says about
+// the fabrics a single device belongs to. It is the only source that names a
+// fabric an mDNS browse can merely observe: a browse sees whatever controllers
+// are advertising right now, while the device itself holds a root certificate
+// per fabric it was ever commissioned into.
+type FabricEvidence struct {
+	Device     EvidenceDevice    `json:"device"`
+	Source     string            `json:"source,omitempty"`
+	Fabrics    []EvidenceFabric  `json:"fabrics"`
+	Reported   int               `json:"reported"`
+	Warnings   []string          `json:"warnings,omitempty"`
+	Report     []ReportSection   `json:"report,omitempty"`
+	Highlights []ReportHighlight `json:"highlights,omitempty"`
+}
+
+// DiagnosticsReport is the whole diagnostics export rendered for reading:
+// every attribute the file carries, named and given its units, grouped into
+// sections. Anything the decoder has no spec entry for still appears, under its
+// cluster with its raw value, so the report is complete rather than curated.
+type DiagnosticsReport struct {
+	Sections []ReportSection `json:"sections"`
+}
+
+// ReportSection is one group of readings, such as the battery or the device's
+// own Thread counters. Group and Icon are presentation only: twenty sections in
+// a flat list is a wall, so the frontend bands them under headings and hangs an
+// icon off each, and the choice of band belongs with the section definition
+// rather than in a second list in the frontend.
+type ReportSection struct {
+	Title   string        `json:"title"`
+	Group   string        `json:"group,omitempty"`
+	Icon    string        `json:"icon,omitempty"`
+	Note    string        `json:"note,omitempty"`
+	Entries []ReportEntry `json:"entries"`
+}
+
+// ReportHighlight is one headline reading, pulled out of the sections below it
+// because it is what someone opening a device's report came to find. Tone is
+// "good", "warn", "bad" or empty, and drives nothing but colour.
+type ReportHighlight struct {
+	Label  string `json:"label"`
+	Value  string `json:"value"`
+	Detail string `json:"detail,omitempty"`
+	Tone   string `json:"tone,omitempty"`
+}
+
+// ReportEntry is one reading. Source carries the Matter attribute path it came
+// from ("0/53/18"), which is what a reader needs to check it against the spec.
+type ReportEntry struct {
+	Label  string `json:"label"`
+	Value  string `json:"value"`
+	Detail string `json:"detail,omitempty"`
+	Source string `json:"source,omitempty"`
+}
+
+// EvidenceDevice identifies the device the diagnostics were taken from, so the
+// reader can tell which of several exports they are looking at.
+type EvidenceDevice struct {
+	Name        string `json:"name,omitempty"`
+	NodeLabel   string `json:"nodeLabel,omitempty"`
+	VendorName  string `json:"vendorName,omitempty"`
+	ProductName string `json:"productName,omitempty"`
+	VendorID    int    `json:"vendorId,omitempty"`
+	ProductID   int    `json:"productId,omitempty"`
+	UniqueID    string `json:"uniqueId,omitempty"`
+	Serial      string `json:"serial,omitempty"`
+}
+
+// EvidenceFabric is one fabric the device belongs to, as derived from its root
+// certificate. ID is the compressed fabric ID that mDNS advertises, so it joins
+// straight to MatterFabric.ID, and NodeID is formatted like MatterNode.NodeID
+// so the two compare directly. Label, VendorID and NodeID are known only for
+// the fabric of the controller that produced the export, because the Fabrics
+// and NOCs attributes are fabric-filtered while the root certificates are not.
+type EvidenceFabric struct {
+	ID         string `json:"id,omitempty"`
+	FabricID   string `json:"fabricId,omitempty"`
+	NodeID     string `json:"nodeId,omitempty"`
+	Label      string `json:"label,omitempty"`
+	VendorID   int    `json:"vendorId,omitempty"`
+	VendorName string `json:"vendorName,omitempty"`
+	IsSource   bool   `json:"isSource"`
+}
+
 type FabricScan struct {
 	Status     string         `json:"status"`
 	Fabrics    []MatterFabric `json:"fabrics"`

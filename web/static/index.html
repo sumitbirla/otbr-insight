@@ -25,12 +25,14 @@
         <a href="#network" data-nav="network"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg></span><span class="nav-label">Nearby networks</span></a>
         <a href="#channels" data-nav="channels"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M6 16V9"/><path d="M11 16V4"/><path d="M16 16v-6"/><path d="M21 16v-3"/></svg></span><span class="nav-label">Channel noise</span></a>
         <a href="#fabrics" data-nav="fabrics"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg></span><span class="nav-label">Matter fabrics</span></a>
+        <a href="#report" data-nav="report"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6"/><path d="M9 17h6"/></svg></span><span class="nav-label">Device report</span></a>
         <a href="#events" data-nav="events"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span class="nav-label">Event log</span></a>
         <a href="#help" data-nav="help"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span><span class="nav-label">Help</span></a>
       </nav>
 
       <div class="sidebar-foot">
         <div class="mini-status"><span class="status-dot" data-status-dot></span><span><b data-status-label>Connecting</b><small>OTBR REST API</small></span></div>
+        <p>Local monitoring<br>No network credentials exposed</p>
       </div>
     </aside>
 
@@ -45,8 +47,10 @@
               <div><dt data-term="pan-id">PAN ID</dt><dd class="mono" data-field="panId">—</dd></div>
             </dl>
           </div>
+          <p class="title-subtitle hidden" id="titleSubtitle"></p>
         </div>
         <div class="top-actions">
+          <button class="scan-button hidden" id="reportImportButton" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>Upload file</button>
           <span class="updated"><i data-refresh-dot></i><span data-updated>Waiting for first refresh</span></span>
           <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh data" title="Refresh data"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
           <button class="icon-button" id="themeButton" type="button" aria-label="Toggle light and dark theme" title="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
@@ -197,14 +201,21 @@
             <p data-term="matter-fabrics">Matter controllers with nodes on this LAN, and which of your devices each one has.</p>
             <div class="network-intro-actions scan-actions">
               <button class="scan-button" id="browseFabricsButton" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg></span>Browse</button>
+              <button class="scan-button ghost" id="identifyFabricsButton" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 14h6"/></svg></span>Identify from diagnostics</button>
             </div>
           </div>
           <section class="inventory-panel card channel-panel">
             <div class="inventory-note neutral hidden" id="fabricNote" role="status"><span>i</span><p></p></div>
+            <div class="inventory-note neutral hidden" id="fabricEvidenceNote" role="status"><span>i</span><p></p></div>
             <div class="network-card-grid" id="fabricRows" role="list" aria-label="Matter fabrics on the LAN" aria-live="polite">
               <div class="inventory-empty"><strong>Not browsed yet</strong><p>Select “Browse” to ask the LAN which Matter fabrics have nodes on it, and which of your Thread devices belong to each.</p></div>
             </div>
           </section>
+        </section>
+
+        <section class="report-section view hidden" id="reportView" data-view="report" aria-hidden="true">
+          <div class="inventory-note neutral hidden" id="reportNote" role="status"><span>i</span><p></p></div>
+          <div id="reportBody"></div>
         </section>
 
         <section class="events-section view hidden" id="eventsView" data-view="events" aria-hidden="true">
@@ -381,7 +392,6 @@
           </article>
         </section>
 
-        <footer><span>OTBR Insight</span><span>Local monitoring · No network credentials exposed</span></footer>
       </div>
     </main>
   </div>
@@ -412,6 +422,7 @@
       </div>
     </form>
   </aside>
+  <input type="file" id="identifyFabricsInput" accept="application/json,.json" class="visually-hidden" aria-label="Matter diagnostics file">
   <div class="confirm-backdrop hidden" id="confirmBackdrop"></div>
   <aside class="confirm-popover hidden" id="confirmPopover" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
     <span class="eyebrow confirm-eyebrow">CONFIRM</span>

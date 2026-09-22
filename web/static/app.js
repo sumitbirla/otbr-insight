@@ -2,7 +2,7 @@
 // depend on it, and they must not drift from the CSS min-height.
 const TOPOLOGY_NODE_HEIGHT = 96;
 
-const state = { overview: null, devices: null, topology: null, networkScan: null, channelScan: null, deviceMode: 'map', deviceQuery: '', roleFilter: 'all', topologySelectedId: '', expandedDevices: new Set(), busy: false, networkScanBusy: false, renamingExt: null, renamingKind: 'device', network: null, fabricScan: null, signalTrails: {}, signalCapable: true };
+const state = { overview: null, devices: null, topology: null, networkScan: null, channelScan: null, deviceMode: 'map', deviceQuery: '', roleFilter: 'all', topologySelectedId: '', expandedDevices: new Set(), busy: false, networkScanBusy: false, renamingExt: null, renamingKind: 'device', network: null, fabricScan: null, fabricEvidence: new Map(), fabricSources: [], deviceReport: null, signalTrails: {}, signalCapable: true };
 const fields = [...document.querySelectorAll('[data-field]')];
 const statusDots = [...document.querySelectorAll('[data-status-dot]')];
 const statusLabels = [...document.querySelectorAll('[data-status-label]')];
@@ -613,6 +613,373 @@ async function browseFabrics() {
   }
 }
 
+// Identifying fabrics from a controller's diagnostics export.
+//
+// A browse sees whichever controllers are advertising and learns no names — a
+// compressed fabric ID is a hash. A device's own root certificates name every
+// fabric it belongs to, advertising or not, and Home Assistant hands them out
+// per device under Settings → Devices → the device → Download diagnostics. So
+// this is the only thing that can put a name on a fabric card, and the only way
+// to see a fabric whose controller is offline.
+//
+// Evidence accumulates across files: each controller's export can name only its
+// own fabric, so two exports name two fabrics. It is kept in memory for the
+// session — the server stores nothing of the upload.
+async function identifyFabrics(file) {
+  if (!file || state.fabricIdentifyBusy) return;
+  state.fabricIdentifyBusy = true;
+  const button = document.getElementById('identifyFabricsButton');
+  button.disabled = true;
+  button.lastChild.textContent = ' Reading…';
+  try {
+    const response = await fetch('/api/v1/fabrics/identify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: await file.text()
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'That file could not be read.');
+    mergeFabricEvidence(payload.data);
+    state.deviceReport = payload.data;
+    renderDeviceReport(state.deviceReport);
+    syncNavigation();
+    renderFabrics(state.fabricScan || { status: 'available', fabrics: [], nodeCount: 0, source: 'mDNS browse' });
+  } catch (error) {
+    const note = document.getElementById('fabricEvidenceNote');
+    note.classList.add('scan-error');
+    note.querySelector('p').textContent = error.message;
+    note.classList.remove('hidden');
+  } finally {
+    state.fabricIdentifyBusy = false;
+    button.disabled = false;
+    button.lastChild.textContent = ' Identify from diagnostics';
+  }
+}
+
+function mergeFabricEvidence(evidence) {
+  const device = [evidence.device?.vendorName, evidence.device?.productName].filter(Boolean).join(' ') || 'a Matter device';
+  state.fabricSources.push({ device, source: evidence.source, warnings: evidence.warnings || [] });
+  for (const fabric of evidence.fabrics || []) {
+    if (!fabric.id) continue;
+    const key = fabric.id.toUpperCase();
+    const known = state.fabricEvidence.get(key) || { id: key, devices: [] };
+    // A later export that actually owns the fabric knows its name; one that
+    // merely holds the root certificate does not, so never let the second
+    // overwrite the first.
+    if (fabric.isSource || !known.isSource) {
+      known.isSource = known.isSource || fabric.isSource;
+      known.label = fabric.label || known.label;
+      known.vendorName = fabric.vendorName || known.vendorName;
+      known.vendorId = fabric.vendorId || known.vendorId;
+      known.fabricId = fabric.fabricId || known.fabricId;
+    }
+    if (!known.devices.includes(device)) known.devices.push(device);
+    state.fabricEvidence.set(key, known);
+  }
+}
+
+function renderFabricEvidenceNote() {
+  const note = document.getElementById('fabricEvidenceNote');
+  note.classList.remove('scan-error');
+  if (!state.fabricSources.length) {
+    note.classList.add('hidden');
+    return;
+  }
+  const named = [...state.fabricEvidence.values()].filter((entry) => entry.label).length;
+  const files = state.fabricSources.length;
+  const warnings = state.fabricSources.flatMap((entry) => entry.warnings);
+  const parts = [`${files} diagnostics file${files === 1 ? '' : 's'} read, describing ${state.fabricEvidence.size} fabric${state.fabricEvidence.size === 1 ? '' : 's'}${named ? `, ${named} of them named` : ''}. An export names only the fabric of the controller that produced it, so read one from each controller to name them all.`];
+  if (warnings.length) parts.push(warnings.join(' '));
+  note.querySelector('p').textContent = parts.join(' ');
+  if (warnings.length) note.classList.add('scan-error');
+  note.classList.remove('hidden');
+}
+
+// evidenceCard draws a fabric that a diagnostics file proved exists but no
+// controller advertised. That gap is the diagnosis: the controller is offline,
+// on another network segment, or not answering mDNS.
+function evidenceCard(entry) {
+  const card = document.createElement('article');
+  card.className = 'network-card unseen';
+  card.setAttribute('role', 'listitem');
+  const header = document.createElement('div');
+  header.className = 'network-card-header';
+  const icon = document.createElement('i');
+  icon.textContent = '○';
+  const identity = document.createElement('span');
+  const name = document.createElement('strong');
+  name.textContent = entry.customName || entry.label || `Fabric ${shortFabric(entry.id)}`;
+  name.title = entry.id;
+  const detail = document.createElement('small');
+  detail.textContent = `Known from ${entry.devices.join(', ')} — no node advertised it on this LAN`;
+  detail.title = detail.textContent;
+  identity.append(name, detail);
+  const tag = document.createElement('span');
+  tag.className = 'network-tag';
+  tag.textContent = 'NOT ADVERTISING';
+  header.append(icon, identity, tag);
+
+  const more = document.createElement('div');
+  more.className = 'network-card-details';
+  const list = document.createElement('dl');
+  list.append(networkDetail('Compressed fabric ID', entry.id));
+  if (entry.fabricId) list.append(networkDetail('Fabric ID', entry.fabricId));
+  if (entry.vendorName) list.append(networkDetail('Controller vendor', entry.vendorName));
+  const actions = document.createElement('div');
+  actions.className = 'fabric-card-actions';
+  actions.append(renameButton(entry.id, entry.customName, entry.customName || `Fabric ${shortFabric(entry.id)}`, 'fabric'));
+  more.append(list, actions);
+  card.append(header, more);
+  if (!entry.customName && entry.label) card.append(fabricSuggestion(entry.id, entry.label));
+  return card;
+}
+
+// fabricSuggestion offers the label the controller gave its own fabric. It is
+// one click to accept rather than applied automatically: the label is that
+// controller's word for itself ("Home"), which is not always what the reader
+// would call it here.
+function fabricSuggestion(id, label) {
+  const row = document.createElement('div');
+  row.className = 'fabric-suggest';
+  const text = document.createElement('span');
+  text.append('The controller calls this fabric ');
+  const strong = document.createElement('strong');
+  strong.textContent = label;
+  text.append(strong);
+  const accept = document.createElement('button');
+  accept.type = 'button';
+  accept.className = 'rename-button';
+  accept.textContent = 'Use this name';
+  accept.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    accept.disabled = true;
+    try {
+      await renameDevice(id, label, 'fabric');
+      showToast(RENAME_KINDS.fabric.saved);
+      applyFabricLabel(id, label);
+    } catch (error) {
+      accept.disabled = false;
+      text.textContent = error.message;
+    }
+  });
+  row.append(text, accept);
+  return row;
+}
+
+function applyFabricLabel(id, label) {
+  const key = id.toUpperCase();
+  const known = state.fabricEvidence.get(key);
+  if (known) known.customName = label;
+  for (const fabric of state.fabricScan?.fabrics || []) {
+    if (fabric.id.toUpperCase() === key) fabric.customName = label;
+  }
+  renderFabrics(state.fabricScan || { status: 'available', fabrics: [], nodeCount: 0, source: 'mDNS browse' });
+}
+
+// Section icons. Kept here rather than in Go so the server ships names, not
+// markup: the report is data, and the same payload feeds any other client.
+const REPORT_ICONS = {
+  tag: '<path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
+  chip: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>',
+  battery: '<rect x="1" y="6" width="18" height="12" rx="2"/><line x1="23" y1="10" x2="23" y2="14"/><line x1="5" y1="10" x2="5" y2="14"/><line x1="9" y1="10" x2="9" y2="14"/><line x1="13" y1="10" x2="13" y2="14"/>',
+  heart: '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>',
+  mesh: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
+  activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  signal: '<path d="M2 20h.01"/><path d="M7 20v-4"/><path d="M12 20v-8"/><path d="M17 20V8"/><path d="M22 4v16"/>',
+  route: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+  moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+  key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  grid: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
+  code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>'
+};
+
+function reportIcon(name) {
+  const span = document.createElement('span');
+  span.className = 'report-icon';
+  span.setAttribute('aria-hidden', 'true');
+  span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${REPORT_ICONS[name] || REPORT_ICONS.grid}</svg>`;
+  return span;
+}
+
+// renderHighlights draws the headline readings above the sections. A report is
+// around 250 rows and almost nobody reads all of them, so the handful that
+// answer "is this device all right" come first.
+function renderHighlights(highlights) {
+  const strip = document.createElement('div');
+  strip.className = 'report-highlights';
+  for (const item of highlights) {
+    const card = document.createElement('article');
+    card.className = `report-stat${item.tone ? ` tone-${item.tone}` : ''}`;
+    const label = document.createElement('span');
+    label.className = 'report-stat-label';
+    label.textContent = item.label;
+    const value = document.createElement('strong');
+    value.textContent = item.value;
+    card.append(label, value);
+    if (item.detail) {
+      const detail = document.createElement('small');
+      detail.textContent = item.detail;
+      card.append(detail);
+    }
+    strip.append(card);
+  }
+  return strip;
+}
+
+// renderDeviceReport draws the whole export: every attribute the file carried,
+// named and grouped by the server. The frontend deliberately makes no sense of
+// the values — cluster and attribute meanings are Matter spec knowledge, and
+// keeping it in one place in Go means it is testable and cannot drift between
+// the REST and MCP views of the same file.
+function renderDeviceReport(evidence) {
+  const body = document.getElementById('reportBody');
+  const sections = evidence.report || [];
+  renderReportNote(evidence, sections);
+  if (!sections.length) {
+    const empty = document.createElement('div');
+    empty.className = 'inventory-empty';
+    const title = document.createElement('strong');
+    title.textContent = 'Nothing to show';
+    const text = document.createElement('p');
+    text.textContent = 'The file was read but carried no device attributes.';
+    empty.append(title, text);
+    body.replaceChildren(empty);
+    return;
+  }
+  const pieces = [];
+  if (evidence.highlights?.length) pieces.push(renderHighlights(evidence.highlights));
+  pieces.push(reportToolbar());
+  // Sections arrive already banded by the server. Grouping them keeps the list
+  // navigable: twenty cards in a row reads as a wall regardless of their order.
+  let currentGroup = null;
+  for (const section of sections) {
+    const group = section.group || '';
+    if (group !== currentGroup) {
+      currentGroup = group;
+      if (group) {
+        const heading = document.createElement('section');
+        heading.className = 'section-head report-group';
+        const inner = document.createElement('div');
+        const eyebrow = document.createElement('span');
+        eyebrow.className = 'eyebrow';
+        eyebrow.textContent = group.toUpperCase();
+        inner.append(eyebrow);
+        heading.append(inner);
+        pieces.push(heading);
+      }
+    }
+    const card = document.createElement('details');
+    card.className = 'disclosure card report-card';
+    // Every section starts shut. The highlights above answer "is this device
+    // all right", so what is left is a reference you drill into, and an index
+    // of twenty titles with their counts reads better than eight open sections.
+    card.open = false;
+    const summary = document.createElement('summary');
+    const chevron = document.createElement('span');
+    chevron.className = 'disclosure-chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    chevron.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+    const heading = document.createElement('span');
+    heading.className = 'disclosure-title';
+    const strong = document.createElement('strong');
+    strong.textContent = section.title;
+    heading.append(strong);
+    const tally = document.createElement('span');
+    tally.className = 'network-tag';
+    tally.textContent = `${section.entries.length}`;
+    summary.append(chevron, reportIcon(section.icon), heading, tally);
+
+    const inner = document.createElement('div');
+    inner.className = 'disclosure-body';
+    if (section.note) {
+      const note = document.createElement('p');
+      note.className = 'report-note';
+      note.textContent = section.note;
+      inner.append(note);
+    }
+    const list = document.createElement('dl');
+    list.className = 'report-list';
+    for (const entry of section.entries) {
+      const row = document.createElement('div');
+      // A label indented by the server marks a sub-row of the entry above it,
+      // which is how the neighbour and interface tables keep their shape.
+      if (entry.label.startsWith('  ')) row.classList.add('report-subrow');
+      const term = document.createElement('dt');
+      term.textContent = entry.label.trim();
+      const value = document.createElement('dd');
+      value.textContent = entry.value;
+      if (entry.value.includes('\n')) value.classList.add('report-block');
+      if (entry.detail) {
+        const detail = document.createElement('small');
+        detail.textContent = entry.detail;
+        value.append(detail);
+      }
+      const source = document.createElement('code');
+      source.className = 'report-source';
+      source.textContent = entry.source || '';
+      source.title = 'Matter attribute path: endpoint / cluster / attribute';
+      row.append(term, value, source);
+      list.append(row);
+    }
+    inner.append(list);
+    card.append(summary, inner);
+    pieces.push(card);
+  }
+  body.replaceChildren(...pieces);
+}
+
+// reportToolbar gives the collapsed list a way to open in one go. Not only a
+// convenience: a browser's find-in-page cannot reach text inside a shut
+// <details>, so without this a collapsed report is unsearchable.
+function reportToolbar() {
+  const bar = document.createElement('div');
+  bar.className = 'report-toolbar';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = 'reportExpandAll';
+  button.className = 'rename-button';
+  button.textContent = 'Expand all';
+  button.addEventListener('click', () => {
+    const cards = reportCards();
+    const opening = cards.some((card) => !card.open);
+    cards.forEach((card) => { card.open = opening; });
+    syncReportToolbar();
+  });
+  bar.append(button);
+  return bar;
+}
+
+function reportCards() {
+  return [...document.querySelectorAll('#reportBody .report-card')];
+}
+
+// Keeps the label honest when sections are opened one at a time, so it never
+// offers to expand a report that is already fully open. Bound once at startup
+// rather than per render: a listener added on every import would stack up.
+function syncReportToolbar() {
+  const button = document.getElementById('reportExpandAll');
+  if (!button) return;
+  button.textContent = reportCards().some((card) => !card.open) ? 'Expand all' : 'Collapse all';
+}
+
+function renderReportNote(evidence, sections) {
+  const note = document.getElementById('reportNote');
+  note.classList.remove('scan-error');
+  // The header already names the device, so the note does not repeat it.
+  const readings = sections.reduce((total, section) => total + section.entries.length, 0);
+  const parts = [`${readings} readings${evidence.source ? `, exported by ${evidence.source}` : ''}.`];
+  // Counters in the export are cumulative and frozen at download time, which is
+  // the one thing that separates this from the live views elsewhere.
+  parts.push('Everything here is a snapshot from when the file was downloaded, not live — the counters do not advance while you read them.');
+  if (evidence.warnings?.length) parts.push(evidence.warnings.join(' '));
+  note.querySelector('p').textContent = parts.join(' ');
+  if (evidence.warnings?.length) note.classList.add('scan-error');
+  note.classList.remove('hidden');
+}
+
 function fabricNodeLabel(node) {
   if (node.customName) return node.customName;
   if (node.onMesh) return node.extendedAddress;
@@ -621,7 +988,12 @@ function fabricNodeLabel(node) {
 
 function renderFabrics(data) {
   state.fabricScan = data;
+  renderFabricEvidenceNote();
   const fabrics = data.fabrics || [];
+  // Fabrics a diagnostics file named that nothing on the LAN advertised. These
+  // are appended as their own cards; a fabric present in both is merely named.
+  const advertised = new Set(fabrics.map((fabric) => fabric.id.toUpperCase()));
+  const unseen = [...state.fabricEvidence.values()].filter((entry) => !advertised.has(entry.id));
   const status = data.status || 'unavailable';
   const note = document.getElementById('fabricNote');
   note.classList.remove('scan-error');
@@ -644,6 +1016,11 @@ function renderFabrics(data) {
     note.classList.add('hidden');
   }
   const rows = document.getElementById('fabricRows');
+  if (!fabrics.length && unseen.length) {
+    rows.replaceChildren(...unseen.map(evidenceCard));
+    updateRefreshLabel();
+    return;
+  }
   if (!fabrics.length) {
     const empty = document.createElement('div');
     empty.className = 'inventory-empty';
@@ -728,8 +1105,10 @@ function renderFabrics(data) {
     }
     more.append(list, nodes, actions);
     card.append(header, facts, more);
+    const known = state.fabricEvidence.get(fabric.id.toUpperCase());
+    if (known && known.label && !fabric.customName) card.append(fabricSuggestion(fabric.id, known.label));
     return card;
-  }));
+  }), ...unseen.map(evidenceCard));
   updateRefreshLabel();
 }
 
@@ -1670,6 +2049,22 @@ function firstIPv6(addresses = []) {
   return addresses.find(Boolean) || '';
 }
 
+// reportTitle names the page after the device the open file describes.
+// VendorName and ProductName are mandatory in Matter's Basic Information
+// cluster, so a name is almost always there — but a bridge reports its own
+// identity on endpoint 0 rather than the bridged device's, and Home Assistant
+// redacts some strings, so the generic heading has to survive.
+function reportTitle() {
+  return state.deviceReport?.device?.name || 'Device report';
+}
+
+function reportSubtitle() {
+  const device = state.deviceReport?.device;
+  if (!device) return 'Home Assistant: Settings → Devices & services → the device → Download diagnostics';
+  return [device.vendorName, device.name && device.name !== device.productName ? device.productName : '']
+    .filter(Boolean).join(' · ') || 'Matter diagnostics export';
+}
+
 // homeTitle names the page after the mesh it is showing; the network name only
 // arrives with the first overview poll, so it falls back until then.
 function homeTitle() {
@@ -1759,7 +2154,7 @@ function renderHistory(data) {
 // activeView resolves the hash to a view. Legacy hashes keep working: #overview,
 // #devices and #topology are the pre-merge names that all fold into home, and
 // #diagnostics is what the event log was called before.
-const VIEWS = ['network', 'channels', 'fabrics', 'events', 'help', 'manage'];
+const VIEWS = ['network', 'channels', 'fabrics', 'report', 'events', 'help', 'manage'];
 
 function activeView() {
   const requested = window.location.hash.slice(1);
@@ -1791,12 +2186,30 @@ function syncNavigation() {
     fabrics: ['Matter fabrics', 'LAN BROWSE'],
     help: ['Help', 'THREAD GUIDE'],
     manage: ['Network Setup', 'MANAGE'],
-    events: ['Event log', 'MESH ACTIVITY']
+    events: ['Event log', 'MESH ACTIVITY'],
+    report: [reportTitle(), 'MATTER DIAGNOSTICS']
   };
-  document.getElementById('pageTitle').textContent = pageMeta[active][0];
+  // Defaulted rather than indexed blind: a view in VIEWS but missing here threw
+  // on [0], which aborted the rest of this function — the title, the eyebrow,
+  // the freshness strip and the per-view loaders — leaving the previous page's
+  // header in place while the body had already switched.
+  const [title, eyebrow] = pageMeta[active] || pageMeta.home;
+  document.getElementById('pageTitle').textContent = title;
+  // A view may carry a one-line subtitle in the header instead of an intro row.
+  // Once a file is open the report names the device it describes, so the
+  // subtitle stops explaining where files come from and says whose it is.
+  const subtitles = { report: reportSubtitle() };
+  const subtitle = document.getElementById('titleSubtitle');
+  subtitle.textContent = subtitles[active] || '';
+  subtitle.classList.toggle('hidden', !subtitles[active]);
+  // The report is read from a file, so the header's poll chrome does not apply
+  // to it: nothing refreshes, and a refresh button there would do nothing.
+  const fromFile = active === 'report';
+  document.getElementById('reportImportButton').classList.toggle('hidden', !fromFile);
+  document.getElementById('refreshButton').classList.toggle('hidden', fromFile);
   // .hidden carries !important; the bare [hidden] attribute loses to .title-meta's display:flex.
   document.getElementById('titleMeta').classList.toggle('hidden', active !== 'home');
-  document.getElementById('pageEyebrow').textContent = pageMeta[active][1];
+  document.getElementById('pageEyebrow').textContent = eyebrow;
   updateRefreshLabel();
   if (active === 'manage') loadNetworkConfig();
   if (active === 'events') loadHistory();
@@ -1820,6 +2233,14 @@ function updateRefreshLabel() {
     ? state.overview?.lastSuccessfulRefresh
     : meshTimestamp || state.overview?.lastSuccessfulRefresh;
   const updated = document.querySelector('[data-updated]');
+  const strip = updated.closest('.updated');
+  // Nothing polls the report: it is whatever file was opened, and freshness is
+  // not a property it has.
+  if (view === 'report') {
+    strip.classList.add('hidden');
+    return;
+  }
+  strip.classList.remove('hidden');
   updated.textContent = timestamp ? `Updated ${relativeTime(new Date(timestamp))}` : 'Waiting for first successful refresh';
 }
 
@@ -1949,14 +2370,10 @@ async function submitRename(name) {
     closeRename();
     showToast(name.trim() ? RENAME_KINDS[kind].saved : RENAME_KINDS[kind].removed);
     await loadData();
-    // The fabric cards are not part of the polled data, so relabel them in place.
-    if (kind === 'fabric' && state.fabricScan) {
-      const trimmed = name.trim();
-      for (const fabric of state.fabricScan.fabrics || []) {
-        if (fabric.id.toLowerCase() === key.toLowerCase()) fabric.customName = trimmed;
-      }
-      renderFabrics(state.fabricScan);
-    }
+    // The fabric cards are not part of the polled data, so relabel them in
+    // place — including any card that came from a diagnostics file rather than
+    // the browse, which the polled data never knew about at all.
+    if (kind === 'fabric') applyFabricLabel(key, name.trim());
   } catch (error) {
     const note = document.getElementById('renameError');
     note.textContent = error.message;
@@ -2178,6 +2595,16 @@ document.getElementById('refreshButton').addEventListener('click', () => loadDat
 document.getElementById('scanNetworksButton').addEventListener('click', scanNetworks);
 document.getElementById('scanChannelsButton').addEventListener('click', scanChannels);
 document.getElementById('browseFabricsButton').addEventListener('click', browseFabrics);
+document.getElementById('identifyFabricsButton').addEventListener('click', () => document.getElementById('identifyFabricsInput').click());
+document.getElementById('reportImportButton').addEventListener('click', () => document.getElementById('identifyFabricsInput').click());
+// toggle does not bubble, so the capture phase is what catches a section opening.
+document.getElementById('reportBody').addEventListener('toggle', syncReportToolbar, true);
+document.getElementById('identifyFabricsInput').addEventListener('change', (event) => {
+  const file = event.target.files?.[0];
+  // Cleared so choosing the same file twice still fires a change event.
+  event.target.value = '';
+  identifyFabrics(file);
+});
 document.getElementById('refreshHistoryButton').addEventListener('click', loadHistory);
 document.getElementById('termClose').addEventListener('click', () => closeTerm(true));
 document.addEventListener('keydown', event => {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"mime"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/otbr-insight/otbr-insight/internal/backup"
+	"github.com/otbr-insight/otbr-insight/internal/matter"
 	"github.com/otbr-insight/otbr-insight/internal/mcpserver"
 	"github.com/otbr-insight/otbr-insight/internal/model"
 	"github.com/otbr-insight/otbr-insight/internal/names"
@@ -179,6 +181,24 @@ func Handler(data Snapshotter, names NameStore, control NetworkController, backu
 			writeJSON(w, http.StatusOK, map[string]any{"data": scan})
 		})
 	}
+	// Identify fabrics from a Matter controller's diagnostics export. Unlike the
+	// browse above this needs no mDNS and no socket — it is pure decoding — so
+	// it is registered unconditionally and works on any host. The upload is read
+	// once, decoded and discarded: it carries a full attribute dump of somebody's
+	// device, so it is never stored, echoed back or logged.
+	mux.HandleFunc("POST /api/v1/fabrics/identify", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, matter.MaxDiagnosticsSize))
+		if err != nil {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "that file is too large to be a diagnostics export"})
+			return
+		}
+		evidence, err := matter.Identify(body)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": evidence})
+	})
 	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		overview := data.Snapshot()
 		status := http.StatusOK

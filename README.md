@@ -44,8 +44,20 @@ The rest follows from that gap:
 - Reachability testing from the border router, which can reach mesh-local addresses a browser cannot
 - On-demand scan of nearby Thread networks, three discovery passes merged, with your own network always shown first — from the border router's own knowledge, since a scan hears a network only when *another* router in it answers
 - Channel noise measurement: about ten seconds of repeated sweeps over the 16 channels, showing the loudest and typical signal on each, graded against the quietest, with Wi-Fi overlap marked and the current channel assessed
+
+![The channel noise view: sixteen bars, one per 802.15.4 channel, coloured quiet, moderate or busy, with the Wi-Fi 1, 6 and 11 bands marked beneath them](docs/channel-noise.png)
+
+*Channel noise — each bar is the loudest reading over three sweeps, the line across it the typical one. Channels are graded against the quietest in the same scan rather than an absolute threshold, because the two measurement paths disagree by 15 dB. The current channel is judged on its typical level: its peak always catches this network's own traffic, which no other channel can show. Synthetic measurements.*
+
 - What each device advertises, from the border router's SRP registry: whether it is registered at all (the difference between "on the mesh" and "visible to controllers"), its Matter node ID on each fabric it is commissioned into, and and whether a commissioning window is open on it right now, badged on the map and the device list
 - Matter fabrics on the LAN, browsed over mDNS: one card per controller's fabric with every node on it, the ones on this mesh named and flagged. Works with an empty mesh too, since Wi-Fi Matter devices and hubs advertise as well. Fabrics can be labelled ("Home Assistant", "Apple Home") and the label replaces the hash wherever the fabric appears
+- A full device report from a Matter controller's diagnostics export: battery charge and voltage, reboot count and boot reason, firmware and hardware versions, the device's own Thread counters (attach attempts, parent changes, every frame sent and received), how it hears its parent, its sleepy check-in intervals, which controllers may administer it, and its certificates decoded rather than printed. Roughly 250 readings for a door sensor, given their units and banded under Overview, Thread and radio, Matter, what the device does, and everything else, with the handful that answer "is this thing all right" pulled out as headline stats on top. Nothing the file carries is dropped
+
+![The device report: a Matter air quality monitor, with headline stats for signal, role, uptime, reboots, firmware and faults, above collapsible sections banded by topic](docs/device-report.png)
+
+*The device report — a Matter controller's diagnostics export decoded. The headline stats answer "is this device all right"; every one of the file's ~250 readings is below, named, given its units and banded. Populated from a sanitised export; the identifiers are documentation values.*
+
+- Fabric identification from a Matter controller's diagnostics export. A fabric ID is a hash and a browse only sees controllers that are advertising, so an unknown fabric stays unknown. A device's own root certificates name every fabric it belongs to: drop in the file Home Assistant downloads per device and the fabric it owns is named for you, ready to save as the label, while a fabric no controller advertised is shown as its own card — the controller being offline or on another segment is otherwise indistinguishable from the fabric not existing. The file is decoded and discarded; nothing is stored
 - Built-in Thread guide and contextual explanations for terms such as RLOC16, partitions, and OMR addressing
 - Dark and light themes, responsive layout for desktop and tablet
 
@@ -209,6 +221,7 @@ The browser talks only to this API; it never contacts OTBR directly. Responses a
 | `GET /api/v1/networks` | Performs an on-demand active scan for nearby networks: three channel-by-channel discovery passes merged over the socket (about 25 seconds), one otbr-web scan otherwise; `passes` says which |
 | `GET /api/v1/channels` | Repeated energy scans over about ten seconds; `sweeps`, `currentChannel` and `channels[]` of `{channel, maxRssi, typicalRssi}` |
 | `GET /api/v1/fabrics` | Browses the LAN over mDNS for Matter nodes (about three seconds) and groups them by fabric, merged with the mesh devices' own SRP registrations; nodes on this mesh carry `extendedAddress`, `onMesh` and any `customName` |
+| `POST /api/v1/fabrics/identify` | Decodes a Matter controller's device diagnostics export (body: the JSON file) into the fabrics that device belongs to, with the producing controller's fabric named, plus `report`: every attribute in the file named, grouped and given its units. Read once and discarded — nothing is stored or logged |
 | `PUT /api/v1/fabrics/{id}/name` | Assigns a label to a Matter fabric (body `{"name": "Home Assistant"}`), shown on the fabric card and beside each device's node ID |
 | `DELETE /api/v1/fabrics/{id}/name` | Removes a fabric label |
 | `GET /api/v1/network` | Interface state and the credential-masked active dataset, plus backup metadata |
@@ -345,6 +358,8 @@ The adapter normalizes several OTBR REST API variants. Behaviour observed on rea
 - Leaving a network is implemented as disable plus delete-dataset. A true factory reset needs `ot-ctl`, which the app deliberately does not use.
 
 ## Tools
+
+`tools/screenshots` regenerates the images this README embeds. They are captured from the real application — real assets, real CSS, the real decoder — with only the *data* substituted: a published mesh view would carry the network's name, PAN ID and every device's extended address, and a real energy scan takes the border router off channel for ten seconds, which is a reasonable thing to do when someone presses the button and an unreasonable thing to do as a build step. `./tools/screenshots/capture.sh` starts its own instance and a headless Chrome, drives them over the DevTools Protocol from a dependency-free Node script, and cleans up after itself. See [its README](tools/screenshots/README.md).
 
 `tools/matter-xref` is a standalone command, not part of the server, that matches Matter node IDs to mesh devices. A commissioned Matter device advertises `_matter._tcp` over mDNS with its Thread extended address as the hostname, which is the key OTBR Insight uses for devices. The server now does the same browse itself (the Matter fabrics panel and `GET /api/v1/fabrics`); the tool predates that and remains as a LAN-side check, shelling out to `dns-sd` (macOS) or `avahi-browse` (Linux):
 

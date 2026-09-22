@@ -402,3 +402,65 @@ func TestFabricsRouteNeedsABrowserAndOverlaysNames(t *testing.T) {
 		t.Fatalf("store after DELETE: %v", names.names)
 	}
 }
+
+// testRootCertificate is a synthetic Matter operational certificate: a subject
+// carrying an rcac-id and a fabric ID, and a 65-byte uncompressed public-key
+// shape. Built rather than captured — a real one carries a live fabric's key.
+const testRootCertificate = "FTABAQE3BicUCAcGBQQDAgEnFYh3ZlVEMyIRGDAJQQQrKCkuLywtIiMgISYnJCU6Ozg5Pj88PTIzMDE2NzQ1CgsICQ4PDA0CAwABBgcEBRobGBkeHxwdEhMQERYXFBVqGA=="
+
+func TestIdentifyFabricsDecodesAnExportWithoutAnyBrowseCapability(t *testing.T) {
+	// The plain snapshotter cannot browse mDNS, which is the point: identifying
+	// a fabric from a file needs no multicast and no daemon socket, so the route
+	// must exist on a host where GET /api/v1/fabrics does not.
+	handler := Handler(&fakeSnapshotter{}, &fakeNames{names: map[string]string{}}, &fakeController{}, &fakeBackups{}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	if browse, err := http.Get(server.URL + "/api/v1/fabrics"); err == nil {
+		defer browse.Body.Close()
+		if browse.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected no browse route on a plain snapshotter, got %d", browse.StatusCode)
+		}
+	}
+
+	// A minimal export: one root certificate carrying its own fabric ID.
+	export := `{"home_assistant":{"version":"2026.9.1"},"data":{"node":{"attributes":{` +
+		`"0/40/3":"Door sensor",` +
+		`"0/62/4":["` + testRootCertificate + `"],"0/62/5":1}}}}`
+	response, err := http.Post(server.URL+"/api/v1/fabrics/identify", "application/json", strings.NewReader(export))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status %d: %s", response.StatusCode, body)
+	}
+	var payload struct {
+		Data model.FabricEvidence `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Data.Fabrics) != 1 || len(payload.Data.Fabrics[0].ID) != 16 {
+		t.Fatalf("fabrics = %+v", payload.Data.Fabrics)
+	}
+	if payload.Data.Device.ProductName != "Door sensor" {
+		t.Fatalf("device = %+v", payload.Data.Device)
+	}
+}
+
+func TestIdentifyFabricsRejectsAFileItCannotRead(t *testing.T) {
+	handler := Handler(&fakeSnapshotter{}, &fakeNames{names: map[string]string{}}, &fakeController{}, &fakeBackups{}, http.NotFoundHandler(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/api/v1/fabrics/identify", "application/json", strings.NewReader("not a diagnostics file"))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", response.StatusCode)
+	}
+}
