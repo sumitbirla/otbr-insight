@@ -332,8 +332,9 @@
 
           <section class="section-head"><div><span class="eyebrow">SET UP</span><h2>Create or join a network</h2></div></section>
           <div class="manage-grid">
-            <article class="card detail-card">
-              <div class="card-heading"><div><span class="eyebrow">NEW NETWORK</span><h3>Form a network</h3></div></div>
+            <details class="disclosure card manage-disclosure" id="formNetworkDisclosure">
+              <summary><span class="disclosure-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span><span class="disclosure-title"><span class="eyebrow">NEW NETWORK</span><strong>Form a network</strong></span><span class="read-only-badge writes-badge">WRITES</span></summary>
+              <div class="disclosure-body">
               <p class="manage-hint">Generates fresh credentials and forms a brand-new Thread network.</p>
               <form id="formNetworkForm" class="manage-form" autocomplete="off">
                 <label>Network name <input name="networkName" maxlength="16" placeholder="Home Lab" required></label>
@@ -342,14 +343,14 @@
                 <p class="rename-error hidden" data-err="form"></p>
                 <button type="submit" class="scan-button manage-submit">Form network</button>
               </form>
-            </article>
-            <article class="card detail-card">
-              <div class="card-heading">
-                <div><span class="eyebrow">EXISTING NETWORK</span><h3>Join a network</h3></div>
-                <div class="join-mode-switch" role="group" aria-label="Join input mode">
-                  <button type="button" class="active" data-join-mode="fields" aria-pressed="true">Fields</button>
-                  <button type="button" data-join-mode="tlv" aria-pressed="false">Paste TLV</button>
-                </div>
+              </div>
+            </details>
+            <details class="disclosure card manage-disclosure" id="joinNetworkDisclosure">
+              <summary><span class="disclosure-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span><span class="disclosure-title"><span class="eyebrow">EXISTING NETWORK</span><strong>Join a network</strong></span><span class="read-only-badge writes-badge">WRITES</span></summary>
+              <div class="disclosure-body">
+              <div class="join-mode-switch" role="group" aria-label="Join input mode">
+                <button type="button" class="active" data-join-mode="fields" aria-pressed="true">Fields</button>
+                <button type="button" data-join-mode="tlv" aria-pressed="false">Paste TLV</button>
               </div>
               <form id="joinNetworkForm" class="manage-form" autocomplete="off">
                 <p class="manage-hint">Attaches using credentials you already have (network key required).</p>
@@ -369,7 +370,8 @@
                 <p class="rename-error hidden" data-err="tlv"></p>
                 <button type="submit" class="scan-button manage-submit">Join from dataset</button>
               </form>
-            </article>
+              </div>
+            </details>
           </div>
 
           <section class="section-head"><div><span class="eyebrow">DANGER ZONE</span><h2>Leave network</h2></div></section>

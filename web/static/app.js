@@ -2006,6 +2006,16 @@ function renderNetworkConfig(config) {
   } else {
     credsCell.textContent = 'Not set';
   }
+  // The setup forms are the whole point of this page when there is no network
+  // to manage, so open them then and leave them shut otherwise. Decided once:
+  // /api/v1/network is polled, and re-deciding would slam shut a form mid-edit.
+  if (!state.setupDisclosuresDecided) {
+    state.setupDisclosuresDecided = true;
+    const open = !dataset.present;
+    document.getElementById('formNetworkDisclosure').open = open;
+    document.getElementById('joinNetworkDisclosure').open = open;
+  }
+
   const toggle = document.getElementById('toggleStateButton');
   toggle.disabled = !dataset.present;
   toggle.textContent = running ? 'Disable' : 'Enable';

@@ -459,7 +459,10 @@ h1 { margin: 5px 0 0; font-size: 1.5rem; letter-spacing: -.02em; }
 .restore-button { flex: none; padding: 9px 16px; border: 1px solid color-mix(in srgb, var(--blue), transparent 45%); border-radius: 7px; color: var(--blue); background: color-mix(in srgb, var(--blue), transparent 86%); cursor: pointer; font-size: 0.8125rem; font-weight: 700; }
 .restore-button:hover { background: color-mix(in srgb, var(--blue), transparent 78%); }
 .restore-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.manage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.manage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.manage-disclosure .disclosure-body { display: flex; flex-direction: column; gap: 12px; padding-top: 14px; }
+.manage-disclosure .manage-hint, .manage-disclosure .manage-form { margin: 0; }
+.manage-disclosure .join-mode-switch { align-self: flex-start; }
 .manage-hint { margin: 0 0 14px; color: var(--muted); font-size: 0.75rem; line-height: 1.5; }
 .manage-form { display: flex; flex-direction: column; gap: 12px; }
 .manage-form label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 0.75rem; font-weight: 650; }
