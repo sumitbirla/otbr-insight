@@ -28,3 +28,6 @@ names.json
 dataset-backup.json
 
 .DS_Store
+
+# Python bytecode from tools/screenshots
+__pycache__/
