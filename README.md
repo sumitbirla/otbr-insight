@@ -295,14 +295,14 @@ No token or header is required. The client must be on the same LAN as the dashbo
 | `get_history` | `device` (name, extended address or RLOC16), `limit` (default 30) | OpenThread's own event log, newest first, with each entry's age in seconds: role and partition changes for the border router, and devices attaching or detaching with the signal at the time | Daemon socket |
 | `ping_device` | `device` (name, extended address, RLOC16 or IPv6 address), `count` (1–10, default 3) | Sent and received counts and min/average/max round trip, plus which address was used. Prefers the mesh-local address, which survives roaming | Daemon socket |
 | `scan_networks` | — | Other Thread networks on the air: name, extended PAN ID, PAN ID, channel and the beaconing device's address | Socket or `otbr-web` |
-| `set_device_name` | `device`, `name` (empty clears) | Stores a local label for a device, shown everywhere it appears; changes nothing on the radio | Local name file |
-| `set_fabric_name` | `fabric` (16-hex compressed fabric ID), `name` (empty clears) | Stores a local label for a Matter fabric, such as the controller that owns it | Local name file |
 | `get_capabilities` | — | Which optional OTBR endpoints this firmware supports, with the status code and latency of the last probe, to tell a missing feature from a transient failure | REST |
 | `get_signal_history` | `device` (name, extended address or RLOC16) | Mean, best and worst RSSI over the last couple of hours, the share of the window the device was present, and a series of at most 24 points so a trend or a dip is visible | In-memory trail |
 | `scan_channels` | — | About ten seconds of sweeps: loudest and typical signal per channel, each graded quiet, moderate or busy against the quietest, its Wi-Fi overlap, the three quietest channels, and a one-sentence assessment of the current channel | Socket or REST |
 | `list_fabrics` | — | Matter fabrics with nodes on the LAN, one entry per controller: node IDs, hostnames, ports and addresses, with the nodes on this mesh named and flagged. About three seconds | mDNS on the LAN, plus the SRP registry with the socket |
+| `set_device_name` | `device`, `name` (empty clears) | Stores a local label for a device, shown everywhere it appears; changes nothing on the radio | Local name file |
+| `set_fabric_name` | `fabric` (16-hex compressed fabric ID), `name` (empty clears) | Stores a local label for a Matter fabric, such as the controller that owns it | Local name file |
 
-All twelve tools are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
+The last two are the only tools that write, and they write to the dashboard's own label file rather than to the network. All twelve are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
 
 A device can be named any way the dashboard shows it. `ping_device` with `"kitchen sensor"` matches the label you gave it (case-insensitively, and by unique substring), `"0x0401"` matches an RLOC16, and a bare IPv6 address is used as given. When no device matches, the error says so and points at `list_devices`.
 
@@ -336,11 +336,11 @@ The shapes are deliberately not the REST payloads. Names replace hex wherever a 
 
 - **No network writes.** Form, join, leave, enable, disable and restore are not exposed. In the UI every one of them sits behind a confirmation dialog, and a tool call is a single click by another name. If an assistant needs to change the network, it can tell you what to click.
 - **No credentials.** The network key, PSKc and dataset TLV are not served by any tool, in keeping with the rule that credentials never appear on a read path.
-- **No device renaming.** The endpoint is read-only apart from the ping. Renaming is a harmless write and could be added if it proves useful.
+- **Nothing beyond the label file.** The two naming tools write to the dashboard's own names file and nothing else. `ping_device` makes the radio transmit but changes no state. That is the whole write surface.
 
 ### Security
 
-The endpoint has the same posture as the rest of the API: no authentication, trusted LAN only. In practice it exposes less than the dashboard does, since it cannot change anything or reveal credentials. A few specifics:
+The endpoint has the same posture as the rest of the API: no authentication, trusted LAN only. In practice it exposes less than the dashboard does: it cannot change the Thread network or reveal credentials, and the only state it can write is a local label. A few specifics:
 
 - Cross-site POSTs are rejected the same way as the REST writes, so a web page cannot use your browser to query the endpoint. Non-browser clients pass.
 - `GET /mcp` returns 405. The server is stateless, so there is no session to hijack and no server-to-client stream to leave open.
@@ -384,7 +384,7 @@ go run ./tools/matter-xref -api http://127.0.0.1:8088
 - OTBR builds without the device collection or diagnostics endpoints show only the local border router.
 - Child devices are matched to the inventory by extended address only when the firmware's diagnostic `children` TLV reports one; older firmware falls back to a derived identifier that is stable only within one snapshot, and those children cannot be named.
 - Nearby-network scans require either the daemon socket or OTBR's web service. Over the socket they report network names and extended PAN IDs; via otbr-web those fields are often absent.
-- The MCP endpoint is read-only apart from the ping, and has no authentication of its own. An assistant can diagnose the network but not change it.
+- The MCP endpoint has no authentication of its own. It reads, apart from `ping_device`, which transmits but changes nothing, and the two naming tools, which write a label to the dashboard's own file. An assistant can diagnose the Thread network and record what it found, but not change the network.
 
 ## Architecture
 
