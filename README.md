@@ -6,36 +6,24 @@ It has **two modes**. Pointed at an OTBR over the network it uses the REST API a
 
 ## Highlights
 
-- **A mesh you can read.** Routers drawn as clusters with their children beneath them, every card carrying signal strength and last-seen. Devices get names you assign once, and those names follow them into the list, the event log and the topology. Terms like RLOC16 and link margin are explained where they appear, because the vocabulary is the real barrier to understanding a Thread network.
-- **Answers when something breaks.** A two-hour signal trail per device that shows gaps, not just weak readings, so an intermittent link looks different from a steadily poor one. OpenThread's own event log covers time before the dashboard was running. Reachability testing reaches mesh-local addresses a browser cannot.
-- **A built-in MCP endpoint.** Twelve tools on the same port, so an assistant reads the same mesh data you do and helps diagnose it — shaped for reasoning rather than dumped as JSON, with no network writes and no credentials. See [Assistant access (MCP)](#assistant-access-mcp).
-- **A Home Assistant diagnostics decoder.** Drop in the export Home Assistant downloads per Matter device and get roughly 250 readings named and given their units: battery, reboots and boot reason, the device's own Thread counters, how it hears its parent, which controllers may administer it, certificates decoded rather than printed. It also names the Matter fabrics a browse can only observe as hashes. The file is decoded and discarded.
-- **Tools for the questions the UI cannot answer by watching.** Channel noise (ten seconds of energy sweeps, graded against the quietest channel with Wi-Fi overlap marked), nearby Thread networks, and Matter fabrics on the LAN.
-- **Network management, bounded.** Form, join, enable, disable, leave and restore — every destructive action behind a confirmation, credentials never on a polled read path.
+- Mesh map with per-device signal, link quality and last-seen
+- Device names you assign once, used everywhere
+- Two-hour signal history per device, gaps included
+- Event log from OpenThread's own recorder
+- Reachability testing from the border router
+- Channel noise measurement, graded and Wi-Fi aware
+- Nearby Thread network scan
+- Matter fabric discovery over mDNS
+- Home Assistant diagnostics decoder: ~250 readings per device, named
+- Built-in MCP endpoint: twelve tools for an assistant
+- Form, join, enable, disable, leave and restore the network
+- Thread terms explained where they appear
 
 Full list under [Features](#features).
 
 ![The OTBR Insight mesh map: four Thread routers, each drawn as a cluster with its attached child devices beneath it](docs/mesh-map.png)
 
 *The mesh view — one cluster per router, with signal strength and last-seen on every card. Populated here with synthetic data; the identifiers are documentation values, not a real network.*
-
-## Why this exists
-
-OTBR already ships with a web UI, `otbr-web`. This project started because that one was hard to understand.
-
-The difference is one of purpose rather than quality. `otbr-web` is a task tool for someone who already knows Thread: its endpoints are `form_network`, `join_network`, `commission`, `add_prefix`, `delete_prefix`, and the ePSKc controls. You go there to *do* a specific thing you already know you need to do, and it does those things well.
-
-What it cannot do is tell you about your network. Its entire read surface is two endpoints — `get_properties`, which describes the border router itself, and `available_network`, which scans the air for other networks. **Neither returns the devices on your own mesh.** There is no device list, no topology, no link quality, no history. If you want to know which of your sensors is attached, to what, how well, or when it last dropped off, the shipped UI has no answer, because it never asks the question.
-
-The rest follows from that gap:
-
-- **Devices have names.** A Thread device identifies itself as `0203040506070809`. You assign it a label once and it appears everywhere — map, list, event history — instead of you memorising hex.
-- **The mesh is drawn, not just listed.** Routers, their children, and which parent each device attached to, which is the thing that actually explains behaviour.
-- **Terms are explained in place.** RLOC16, partitions, OMR addressing, link margin: each has a `?` beside it, plus a short Thread guide built in. The vocabulary is the main barrier to understanding a Thread network, and hiding it behind a glossary elsewhere does not help.
-- **Values are given meaning.** Not just a signal number, but whether a link is straining; not just a device list, but which entries may be stale and why.
-- **State separates from history.** OpenThread records role changes, attachments and departures; the Event log view surfaces them, so "it dropped off last night" is answerable.
-
-`otbr-web` remains the tool for what it does. Commissioning a device with a PSKd or a QR code, managing on-mesh prefixes, and the ePSKc flow are all implemented there and deliberately **not** here. The two can run side by side; if you keep `otbr-web` for commissioning, note that this app will also use its `available_network` and `get_properties` endpoints when the daemon socket is unavailable.
 
 ## Features
 
@@ -144,49 +132,37 @@ The OTBR URL must be `http` or `https` and must not contain credentials, a query
 
 ## Data sources
 
-Everything the dashboard shows comes from one of two channels. The REST API works from anywhere; the daemon socket is a UNIX socket, so it only works when otbr-insight runs **on the border router itself**. Where both can answer, the socket wins because its data is live rather than cached.
+Everything comes from one of two channels. The REST API works from anywhere. The daemon socket is a UNIX socket, so it only works when otbr-insight runs **on the border router itself** — and where both can answer, the socket wins, because its data is live rather than cached.
 
-**Over the REST API** (`--otbr-url`, works remotely)
+```mermaid
+flowchart LR
+  UI(["OTBR Insight"])
+  UI --> REST
+  UI --> SOCK
 
-| Data | Endpoint |
-| --- | --- |
-| Node status: role, state, RLOC16, router ID, extended address, extended PAN ID, partition ID, leader router ID, router count, OMR and RLOC addresses, border-agent state | `GET /api/node`, with `GET /node` overlaid for live values |
-| Active dataset: network name, channel, PAN ID, extended PAN ID, mesh-local prefix, active timestamp, and whether a network key and PSKc are set | `GET /node/dataset/active` |
-| Dataset TLV, and the unmasked network key and PSKc for the Reveal action | `GET /node/dataset/active` (`text/plain` and JSON) |
-| Thread interface state | `GET /node/state` |
-| Which optional endpoints this OTBR build supports | probes of `/api/node`, `/api/devices`, `/api/topology`, `/api/diagnostics` |
-| Device inventory — *fallback only, a cache* | `GET /api/devices` |
-| Topology and child attachments — *fallback only, a cache* | `GET /api/diagnostics` |
-| Mesh discovery sweep to refresh those caches — *fallback only* | `POST /api/actions` |
-| Channel energy scan — *fallback only* | `POST /api/actions` (`getEnergyScanTask`), polled at `GET /api/actions/{id}`, result from `GET /api/diagnostics/{id}` |
-| **All network changes**: form, join, join-from-TLV, enable, disable, leave, restore | `PUT`/`DELETE /node/state`, `PUT`/`DELETE /node/dataset/active` |
+  subgraph REST["REST API · port 8081 · works from anywhere"]
+    R1["Node status, dataset,<br/>credentials, capabilities"]
+    R2["All network changes:<br/>form · join · enable<br/>disable · leave · restore"]
+    R3["Devices and topology<br/><i>cached — needs a sweep</i>"]
+  end
 
-**Over the daemon socket** (`--otbr-socket`, border router only)
+  subgraph SOCK["Daemon socket · on the border router · preferred"]
+    S1["Devices and topology<br/><i>live — no sweep</i>"]
+    S2["Nearby networks,<br/>channel noise"]
+    S3["Event history, ping,<br/>radio details"]
+  end
+```
 
-| Data | CLI command |
-| --- | --- |
-| Router set and inter-router links | `meshdiag topology` |
-| Children of each router, with link margin, RSSI, and frame/message error rates | `meshdiag childtable <rloc16>` |
-| Child IPv6 addresses | `meshdiag childip6 <rloc16>` |
-| Neighbour ages and signal, refreshed every poll at no radio cost | `neighbor table` |
-| Frame and message error rates for **routers** as well as children | `neighbor linkquality` |
-| Router link quality in/out and path cost | `router table` |
-| Addresses of routers, which appear in no child table | `srp server host` |
-| The border router's own addresses | `ipaddr`, `ipaddr mleid` |
-| Which address is off-mesh routable | `br omrprefix` |
-| Nearby Thread networks, with names and extended PAN IDs | `discover <channel>` for each channel with a pause at home between them, three passes merged — a neighbour answers a single pass only about half the time; falling back to whole-band `discover`, then `scan` |
-| Peak signal per channel, for the channel-noise chart | `scan energy`, repeated for about ten seconds (default dwell time only — see below) |
-| Runtime details: OpenThread and RCP versions, API version, channel, transmit power, EUI-64, PAN ID, interface state | `version`, `version api`, `rcp version`, `channel`, `txpower`, `eui64`, `panid`, `state` |
-| Event history: role and partition changes, device attachments and departures | `history netinfo`, `history neighbor` |
-| Reachability test | `ping` |
+**All network changes go over REST**, including when the socket is present: writes stay on the documented API. The socket is read-only apart from scanning.
 
-**Neither channel** supplies the last two rows of the runtime group when otbr-web is running instead of the socket — see *Optional runtime details* above.
+Without the socket, `otbr-web` on port 80 can stand in for the nearby-network scan and the runtime radio details, if it is running — see *Optional runtime details* above. It cannot stand in for the event history or the reachability ping: those exist only over the socket.
 
-Scanning takes the radio off the network's channel, and the border router cannot serve its children while it is away. Measured on the reference router: a whole-band `discover` is 4.9 s away without a break, which is long enough for sleepy children to fail several polls, give up on their parent and re-attach — to another router, since the border router is still deaf. After a run of scans every child had migrated to the one other router in the mesh, and the event log showed pairs of children re-attaching in the same second, which is the signature. Discovery is therefore issued one channel at a time (0.3 s each) with a pause on the home channel between channels, and the energy scan's sweeps are 0.1 s each with pauses between them, so no absence outlasts a poll retry.
+### Costs worth knowing
 
-One hazard is worth knowing. The energy scan is run only with the firmware's default dwell time. A 500 ms per-channel dwell hung the radio co-processor on the reference border router (a Silicon Labs EFR32 on an SMLIGHT SLZB-07): the RCP stopped answering, `otbr-agent` aborted, and only unplugging the dongle brought it back. The default dwell has been exercised repeatedly without incident, and the app offers no way to lengthen it. To see past the snapshot a short listen gives, the app instead repeats the safe sweep for about ten seconds with pauses between passes, and keeps the loudest and the median reading per channel.
-
-Two costs are worth knowing. The `meshdiag` queries are transactions with other routers, so they are cached for 30 seconds; ages and signal come from local tables on every poll and cost no radio time. And the daemon serves **one client session at a time**: a new connection displaces the previous one, taking any output still pending with it. The app opens a connection per command and polls every few seconds, so a long command run by hand in `ot-ctl` while the app is up — `discover`, `scan`, `ping`, `meshdiag` — will usually lose its results and its `Done` to the app's next poll. Stop the service, or use the app's own scan, history and ping instead.
+- **Scanning takes the radio off channel**, and the border router cannot serve its children while it is away. A whole-band `discover` is 4.9 s away without a break — long enough for sleepy children to give up and re-attach to another router. Discovery is therefore issued one channel at a time (0.3 s each) with a pause at home between them, and energy sweeps are 0.1 s each, so no absence outlasts a poll retry.
+- **The energy scan uses the firmware's default dwell only.** A 500 ms dwell hung the radio co-processor on the reference router (Silicon Labs EFR32 on an SMLIGHT SLZB-07) — `otbr-agent` aborted and only a power cycle recovered it. There is no way to lengthen it. To see past a single snapshot the app repeats the safe sweep for about ten seconds instead, keeping the loudest and median per channel.
+- **The daemon serves one client at a time.** A new connection displaces the previous one, taking any pending output with it. So a long `ot-ctl` command run by hand while the app is polling will usually lose its results — stop the service, or use the app's own scan, history and ping.
+- **`meshdiag` queries cost radio time**, so they are cached for 30 seconds. Ages and signal come from local tables on every poll and cost nothing.
 
 ## Running with systemd
 
