@@ -29,51 +29,46 @@ Full list under [Features](#features).
 
 **Monitoring**
 
-- Mesh map of routers, end devices, and their parent links, built from OTBR network diagnostics, with a device inspector for each node
-- Searchable device list with role, RLOC16, parent (by name), signal with retry rate beneath it, and last-seen time; addresses and the remaining details one click away in the expanded row
-- User-assigned device names, persisted locally and shown on both the map and the list
-- Network identity, border-router runtime, RCP radio, and IPv6 details in collapsible panels
-- Live status: online, network disabled, stale data, or OTBR offline, with the last valid snapshot kept while OTBR is unreachable
-- Live mesh data when the daemon socket is available: devices appear and disappear as they attach, with no discovery sweep and no stale cache. Over REST alone, a periodic sweep is posted instead
-- Per-device link health: signal, link margin, and frame/message retry rates, flagged when a link is straining
-- Signal history per device: a two-hour sparkline of mean, best and worst RSSI with gaps where the device was not there at all, so an intermittent link reads differently from a steadily weak one. Kept in memory, so it starts empty after a restart
-- Event log of OpenThread's own recorded history — attachments, departures, role and partition changes — covering time before the dashboard was running
-- Reachability testing from the border router, which can reach mesh-local addresses a browser cannot
-- On-demand scan of nearby Thread networks, three discovery passes merged, with your own network always shown first — from the border router's own knowledge, since a scan hears a network only when *another* router in it answers
-- Channel noise measurement: about ten seconds of repeated sweeps over the 16 channels, showing the loudest and typical signal on each, graded against the quietest, with Wi-Fi overlap marked and the current channel assessed
+- Mesh map of routers, end devices and their parent links, with an inspector per node
+- Searchable device list: role, RLOC16, parent by name, signal, retry rate, last seen
+- Device names you assign once, shown on the map, the list and the event log
+- Network identity, border-router runtime, RCP radio and IPv6 details in collapsible panels
+- Live status — online, network disabled, stale, or OTBR offline — keeping the last good snapshot while OTBR is unreachable
+- Live mesh over the daemon socket: devices appear and vanish as they attach, no sweep and no stale cache. Over REST alone a periodic sweep is posted instead
+- Per-device link health: signal, link margin and frame/message retry rates, flagged when a link is straining
+- Two-hour signal history per device, with gaps where the device was absent, so an intermittent link reads differently from a steadily weak one. Memory only, so it starts empty after a restart
+- Event log from OpenThread's own recorder, covering time before the dashboard was running
+- Reachability testing from the border router, which reaches mesh-local addresses a browser cannot
+- Nearby Thread networks: three discovery passes merged, since a single pass hears a given neighbour only about half the time
+- Channel noise: ~10 s of repeated sweeps, graded against the quietest channel, with Wi-Fi overlap marked
 
 ![The channel noise view: sixteen bars, one per 802.15.4 channel, coloured quiet, moderate or busy, with the Wi-Fi 1, 6 and 11 bands marked beneath them](docs/channel-noise.png)
 
-*Channel noise — each bar is the loudest reading over three sweeps, the line across it the typical one. Channels are graded against the quietest in the same scan rather than an absolute threshold, because the two measurement paths disagree by 15 dB. The current channel is judged on its typical level: its peak always catches this network's own traffic, which no other channel can show. Synthetic measurements.*
+*Bar is the loudest reading, line the typical one. Grading is relative to the quietest channel in the same scan, because the two measurement paths disagree by 15 dB. Synthetic measurements.*
 
-- What each device advertises, from the border router's SRP registry: whether it is registered at all (the difference between "on the mesh" and "visible to controllers"), its Matter node ID on each fabric it is commissioned into, and and whether a commissioning window is open on it right now, badged on the map and the device list
-- Matter fabrics on the LAN, browsed over mDNS: one card per controller's fabric with every node on it, the ones on this mesh named and flagged. Works with an empty mesh too, since Wi-Fi Matter devices and hubs advertise as well. Fabrics can be labelled ("Home Assistant", "Apple Home") and the label replaces the hash wherever the fabric appears
-- A full device report from a Matter controller's diagnostics export: battery charge and voltage, reboot count and boot reason, firmware and hardware versions, the device's own Thread counters (attach attempts, parent changes, every frame sent and received), how it hears its parent, its sleepy check-in intervals, which controllers may administer it, and its certificates decoded rather than printed. Roughly 250 readings for a door sensor, given their units and banded under Overview, Thread and radio, Matter, what the device does, and everything else, with the handful that answer "is this thing all right" pulled out as headline stats on top. Nothing the file carries is dropped
+- What each device advertises via SRP: whether it is registered at all — the difference between "on the mesh" and "visible to controllers" — its Matter node ID per fabric, and whether a commissioning window is open right now
+- Matter fabrics on the LAN over mDNS, labellable, working even with an empty mesh since Wi-Fi Matter devices advertise too
+- A device report from a Matter diagnostics export: ~250 readings named and given their units — battery, reboots, the device's own Thread counters, how it hears its parent, certificates decoded rather than printed. Nothing in the file is dropped
 
 ![The device report: a Matter air quality monitor, with headline stats for signal, role, uptime, reboots, firmware and faults, above collapsible sections banded by topic](docs/device-report.png)
 
-*The device report — a Matter controller's diagnostics export decoded. The headline stats answer "is this device all right"; every one of the file's ~250 readings is below, named, given its units and banded. Populated from a sanitised export; the identifiers are documentation values.*
+*Headline stats answer "is this device all right"; the rest is below, banded. From a sanitised export; the identifiers are documentation values.*
 
-- Fabric identification from a Matter controller's diagnostics export. A fabric ID is a hash and a browse only sees controllers that are advertising, so an unknown fabric stays unknown. A device's own root certificates name every fabric it belongs to: drop in the file Home Assistant downloads per device and the fabric it owns is named for you, ready to save as the label, while a fabric no controller advertised is shown as its own card — the controller being offline or on another segment is otherwise indistinguishable from the fabric not existing. The file is decoded and discarded; nothing is stored
-- Built-in Thread guide and contextual explanations for terms such as RLOC16, partitions, and OMR addressing
-- Dark and light themes, responsive layout for desktop and tablet
+- Fabric identification from the same export. A fabric ID is a hash, and a browse sees only controllers that are advertising — but a device's root certificates name every fabric it belongs to, including ones nothing on the LAN is advertising. Decoded and discarded; nothing is stored
+- Built-in Thread guide, with terms like RLOC16 and OMR addressing explained where they appear
+- Dark and light themes, responsive down to tablet width
 
 **Management** (Network Setup view)
 
-- Form a new network with locally generated credentials
-- Join an existing network from its credentials, optionally including the PSKc and mesh-local prefix, or by pasting an operational dataset TLV from another border router
-- Enable and disable the Thread interface, or leave the network entirely
+- Form a network with locally generated credentials
+- Join one from its credentials, or by pasting an operational dataset TLV from another border router
+- Enable, disable, or leave the network
 - Automatic backup of the previous dataset before every destructive change, with one-click restore
-- Reveal the network key, PSKc, and dataset TLV on demand for pasting into other border routers
+- Reveal the network key, PSKc and dataset TLV on demand
 
 Every destructive action is confirmed in a dialog before it is sent.
 
-**Assistant access** (MCP)
-
-- Built-in Model Context Protocol server at `/mcp`, no extra process or configuration
-- Twelve tools covering the network summary, device list, topology, event history, signal history, reachability testing, nearby-network scan, channel noise, Matter fabrics, firmware capabilities, and naming devices and fabrics
-- Results shaped for a language model: device names instead of hex, parents by name, ages in seconds, topology nested by router
-- No network writes and no credentials over MCP. The only writes are a device or fabric label, stored in the dashboard's own file
+**Assistant access** — a built-in MCP server at `/mcp` with twelve tools, no extra process. See [Assistant access (MCP)](#assistant-access-mcp).
 
 ## Security model
 
@@ -203,15 +198,15 @@ The browser talks only to this API; it never contacts OTBR directly. Responses a
 | `GET /api/v1/devices` | Device inventory with user names overlaid as `customName` |
 | `GET /api/v1/topology` | Router adjacency and child attachments from network diagnostics |
 | `GET /api/v1/capabilities` | Which optional OTBR endpoints this build supports |
-| `GET /api/v1/networks` | Performs an on-demand active scan for nearby networks: three channel-by-channel discovery passes merged over the socket (about 25 seconds), one otbr-web scan otherwise; `passes` says which |
-| `GET /api/v1/channels` | Repeated energy scans over about ten seconds; `sweeps`, `currentChannel` and `channels[]` of `{channel, maxRssi, typicalRssi}` |
-| `GET /api/v1/fabrics` | Browses the LAN over mDNS for Matter nodes (about three seconds) and groups them by fabric, merged with the mesh devices' own SRP registrations; nodes on this mesh carry `extendedAddress`, `onMesh` and any `customName` |
-| `POST /api/v1/fabrics/identify` | Decodes a Matter controller's device diagnostics export (body: the JSON file) into the fabrics that device belongs to, with the producing controller's fabric named, plus `report`: every attribute in the file named, grouped and given its units. Read once and discarded — nothing is stored or logged |
-| `PUT /api/v1/fabrics/{id}/name` | Assigns a label to a Matter fabric (body `{"name": "Home Assistant"}`), shown on the fabric card and beside each device's node ID |
+| `GET /api/v1/networks` | On-demand scan for nearby networks: three passes merged over the socket (~25 s), one otbr-web scan otherwise; `passes` says which |
+| `GET /api/v1/channels` | Energy scans over about ten seconds: `sweeps`, `currentChannel`, and `channels[]` of `{channel, maxRssi, typicalRssi}` |
+| `GET /api/v1/fabrics` | Matter nodes on the LAN grouped by fabric, merged with the mesh devices' SRP registrations. About three seconds |
+| `POST /api/v1/fabrics/identify` | Decodes a Matter diagnostics export (body: the JSON file) into the fabrics the device belongs to, plus `report`: every attribute named and given its units. Read once and discarded |
+| `PUT /api/v1/fabrics/{id}/name` | Labels a Matter fabric (body `{"name": "Home Assistant"}`) |
 | `DELETE /api/v1/fabrics/{id}/name` | Removes a fabric label |
 | `GET /api/v1/network` | Interface state and the credential-masked active dataset, plus backup metadata |
 | `GET /api/v1/network/credentials` | The unmasked network key, PSKc, and dataset TLV |
-| `GET /api/v1/devices/{ext}/signal` | The device's two-hour signal trail in one-minute buckets, each with mean, min and max RSSI and whether the device was present |
+| `GET /api/v1/devices/{ext}/signal` | Two-hour signal trail in one-minute buckets: mean, min and max RSSI, and whether the device was present |
 | `GET /api/v1/history` | OpenThread's recorded role, partition, and neighbour events, with user names overlaid; needs the daemon socket |
 | `GET /api/v1/health` | `{"status", "apiHealth"}`; returns 503 when OTBR is offline and no snapshot has ever been received |
 | `POST /mcp` | Model Context Protocol endpoint; see [Assistant access (MCP)](#assistant-access-mcp) |
@@ -228,7 +223,7 @@ The browser talks only to this API; it never contacts OTBR directly. Responses a
 | `POST /api/v1/network/restore` | — | Re-apply the backed-up dataset |
 | `PUT /api/v1/devices/{ext}/name` | `{"name"}` | Set a device name by extended address |
 | `DELETE /api/v1/devices/{ext}/name` | — | Clear a device name |
-| `POST /api/v1/devices/{address}/ping` | — | Reachability test from the border router; needs the daemon socket. A POST because it makes the radio transmit, though it changes nothing. Can take tens of seconds against a sleepy device |
+| `POST /api/v1/devices/{address}/ping` | — | Reachability test from the border router. A POST because it transmits, though it changes nothing; tens of seconds against a sleepy device |
 
 Errors carry `{"error": "..."}`. Invalid input returns 400, a cross-site request 403, a wrong content type 415, an OTBR rejection 409 or 502, an OTBR timeout 504, and an unreachable OTBR 502. Every network change is preceded by a dataset backup and followed by an immediate status refresh.
 
@@ -265,22 +260,22 @@ No token or header is required. The client must be on the same LAN as the dashbo
 
 | Tool | Arguments | Returns | Needs |
 | --- | --- | --- | --- |
-| `get_network` | — | Network name, channel, PAN ID, extended PAN ID and mesh-local prefix; the border router's role, state, RLOC16, addresses and firmware versions; leader, partition and router count; whether the Thread dataset is configured and whether a restore point exists; and **device counts** — total, routers, end devices, unnamed, and any device not heard from in ten minutes, by name. It does **not** include the device list, so it stays cheap to call first | REST |
-| `list_devices` | `role` (`router` or `end-device`), `query` (substring of name, extended address or RLOC16) | One entry per device: name, extended address, role, parent **by name**, seconds since last heard, RSSI, link quality (0–3), link margin, frame and message error rates, mesh-local and OMR addresses, Thread version, and what it registered with SRP: registration status and its Matter services with fabric and node ID | REST; live data with the socket |
-| `get_topology` | — | Each router with the children attached to it, ordered border router first, then the leader; router-to-router links with link quality in/out, path cost and RSSI; and a separate list of children whose parent could not be resolved | REST; live data with the socket |
-| `get_history` | `device` (name, extended address or RLOC16), `limit` (default 30) | OpenThread's own event log, newest first, with each entry's age in seconds: role and partition changes for the border router, and devices attaching or detaching with the signal at the time | Daemon socket |
-| `ping_device` | `device` (name, extended address, RLOC16 or IPv6 address), `count` (1–10, default 3) | Sent and received counts and min/average/max round trip, plus which address was used. Prefers the mesh-local address, which survives roaming | Daemon socket |
-| `scan_networks` | — | Other Thread networks on the air: name, extended PAN ID, PAN ID, channel and the beaconing device's address | Socket or `otbr-web` |
-| `get_capabilities` | — | Which optional OTBR endpoints this firmware supports, with the status code and latency of the last probe, to tell a missing feature from a transient failure | REST |
-| `get_signal_history` | `device` (name, extended address or RLOC16) | Mean, best and worst RSSI over the last couple of hours, the share of the window the device was present, and a series of at most 24 points so a trend or a dip is visible | In-memory trail |
-| `scan_channels` | — | About ten seconds of sweeps: loudest and typical signal per channel, each graded quiet, moderate or busy against the quietest, its Wi-Fi overlap, the three quietest channels, and a one-sentence assessment of the current channel | Socket or REST |
-| `list_fabrics` | — | Matter fabrics with nodes on the LAN, one entry per controller: node IDs, hostnames, ports and addresses, with the nodes on this mesh named and flagged. About three seconds | mDNS on the LAN, plus the SRP registry with the socket |
-| `set_device_name` | `device`, `name` (empty clears) | Stores a local label for a device, shown everywhere it appears; changes nothing on the radio | Local name file |
-| `set_fabric_name` | `fabric` (16-hex compressed fabric ID), `name` (empty clears) | Stores a local label for a Matter fabric, such as the controller that owns it | Local name file |
+| `get_network` | — | Identity, border-router state, leader and partition, whether a dataset and a restore point exist, and **device counts** — not the device list, so it stays cheap to call first | REST |
+| `list_devices` | `role`, `query` | Per device: name, extended address, role, parent **by name**, age, RSSI, link quality and margin, error rates, addresses, and what it registered with SRP | REST; live with the socket |
+| `get_topology` | — | Routers with their children, router-to-router links with quality and path cost, and any children whose parent could not be resolved | REST; live with the socket |
+| `get_history` | `device`, `limit` | OpenThread's event log, newest first: role and partition changes, attachments and departures, with the signal at the time | Socket |
+| `get_signal_history` | `device` | Mean, best and worst RSSI over about two hours, how much of the window the device was present, reduced to at most 24 points | In-memory trail |
+| `scan_networks` | — | Other Thread networks on the air: name, extended PAN ID, PAN ID, channel | Socket or `otbr-web` |
+| `scan_channels` | — | Per channel: loudest and typical level, graded against the quietest, Wi-Fi overlap, and an assessment of the current one. About ten seconds | Socket or REST |
+| `list_fabrics` | — | Matter fabrics with nodes on the LAN, mesh devices named and flagged. About three seconds | mDNS, plus SRP with the socket |
+| `get_capabilities` | — | Which optional OTBR endpoints this firmware supports, with the last probe's status and latency — to tell a missing feature from a transient failure | REST |
+| `ping_device` | `device`, `count` | Sent and received counts, min/average/max round trip, and which address was used. Prefers the mesh-local address, which survives roaming | Socket |
+| `set_device_name` | `device`, `name` | Stores a local label for a device. Empty clears it | Local name file |
+| `set_fabric_name` | `fabric`, `name` | Stores a local label for a Matter fabric. `fabric` is the full 16-hex compressed ID | Local name file |
 
-The last two are the only tools that write, and they write to the dashboard's own label file rather than to the network. All twelve are always listed. When a source is unavailable — no daemon socket, a stopped `otbr-web`, a socket the process cannot open — the tool returns the reason in words the model can read and relay, rather than a protocol failure.
+The last two are the only tools that write, and they write to the dashboard's own label file rather than to the network. All twelve are always listed: when a source is unavailable, the tool returns the reason in words the model can relay, not a protocol failure.
 
-A device can be named any way the dashboard shows it. `ping_device` with `"kitchen sensor"` matches the label you gave it (case-insensitively, and by unique substring), `"0x0401"` matches an RLOC16, and a bare IPv6 address is used as given. When no device matches, the error says so and points at `list_devices`.
+A device can be named any way the dashboard shows it — a label (case-insensitively, by unique substring), an extended address, an RLOC16 like `0x0401`, or a bare IPv6 address. When nothing matches, the error says so and points at `list_devices`.
 
 ### What the results look like
 
@@ -304,9 +299,9 @@ A device can be named any way the dashboard shows it. `ping_device` with `"kitch
 }
 ```
 
-Read together, those fields already tell the story: a child at the edge of range (RSSI −91, link quality 1) attached to a router rather than the border router, with a third of its frames needing a retry.
+Those fields already tell the story: a child at the edge of range attached to a router rather than the border router, with a third of its frames needing a retry.
 
-The shapes are deliberately not the REST payloads. Names replace hex wherever a label exists, parents are named rather than given as RLOC16s, timestamps become ages, and the topology is nested by router rather than flattened into node and edge lists. Every tool also returns a structured result alongside the text, so clients that use output schemas get typed fields. The server's instructions, sent on connect, give the model the reading conventions — what a weak RSSI is, that error rates are a rolling average over roughly the last 64 frames, and that a sleepy device answering a ping late is normal.
+The shapes are deliberately not the REST payloads — names replace hex, parents are named, timestamps become ages, and topology is nested by router. Every tool also returns a structured result alongside the text, so clients using output schemas get typed fields, and the instructions sent on connect give the model the reading conventions: what counts as a weak RSSI, that error rates are a rolling average over roughly the last 64 frames, and that a sleepy device answering a ping late is normal.
 
 ### What is deliberately missing
 
