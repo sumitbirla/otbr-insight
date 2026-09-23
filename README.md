@@ -205,7 +205,7 @@ Adjust `ExecStart` if OTBR listens on a different address or port.
 
 ## Building from source
 
-Go 1.25 or newer is required.
+Go 1.26 or newer is required, which is what `go.mod` declares.
 
 ```sh
 make test       # go test ./...
